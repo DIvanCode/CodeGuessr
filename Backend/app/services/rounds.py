@@ -67,6 +67,7 @@ def make_snapshot(
             "context_start": context_start + 1,
             "start": start + 1,
             "lines": highlighted[context_start:start + SNIPPET_LENGTH],
+            "full_lines": highlight(source, lexer, HtmlFormatter(nowrap=True)).splitlines(),
         })
         if functions is not None:
             files[-1]["full_lines"] = highlight(
