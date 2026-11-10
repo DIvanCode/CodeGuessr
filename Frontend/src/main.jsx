@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { CodeExplorer } from "./CodeExplorer.jsx";
 import { Atlas } from "./Atlas.jsx";
 import { LanguagePie } from "./LanguagePie.jsx";
 import { totalShare } from "./language-shares.js";
@@ -29,8 +30,8 @@ function readGame() {
   }
 }
 
-async function api(path, data) {
-  const response = await fetch(`/api${path}`, data === undefined ? {} : {
+async function api(path, data, signal) {
+  const response = await fetch(`/api${path}`, data === undefined ? { signal } : { signal,
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
   });
   if (response.ok) return response.json();
@@ -242,6 +243,7 @@ function App() {
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
   const total = game.world?.total ?? TOTAL;
+  const [hasContext, setHasContext] = useState(false);
   const finished = game.history.length;
   const score = game.history.reduce((sum, item) => sum + item.score, 0);
   const number = Math.min(total, round?.result ? finished : finished + 1);
@@ -372,14 +374,16 @@ function App() {
           ) : (
             <>
               {!round.result && <HintValues values={round.hint_values} />}
-              <Editor round={round} file={file} onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
+              <CodeExplorer key={round.id} round={round} file={file} api={api}
+                onContextAvailable={setHasContext}
+                onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
               {error && <p className="error" role="status">{error}</p>}
               {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
                 <>
                   <div className="hints">
                     {hints.map(([kind, label]) => (
                       <button key={kind} type="button" onClick={() => act("hint", { kind })}
-                        disabled={pending || round.hints[kind] || (kind === "context" && !file.has_context)}>
+                        disabled={pending || round.hints[kind] || (kind === "context" && !hasContext)}>
                         {label} <span>{round.hints[kind] ? "✓" : `−${round.hint_costs[kind]}`}</span>
                       </button>
                     ))}
