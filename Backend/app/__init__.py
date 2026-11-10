@@ -1,0 +1,1 @@
+"""CodeGuessr backend application."""
