@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { CodeExplorer } from "./CodeExplorer.jsx";
 import { Atlas } from "./Atlas.jsx";
 import { LanguagePie } from "./LanguagePie.jsx";
 import { totalShare } from "./language-shares.js";
@@ -28,8 +29,8 @@ function readGame() {
   }
 }
 
-async function api(path, data) {
-  const response = await fetch(`/api${path}`, data === undefined ? {} : {
+async function api(path, data, signal) {
+  const response = await fetch(`/api${path}`, data === undefined ? { signal } : { signal,
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
   });
   if (response.ok) return response.json();
@@ -45,30 +46,6 @@ function storeResult(game, round) {
     ...game,
     history: [...game.history, { id: round.id, score: round.result.score, target: round.result.answer.repository_id }],
   };
-}
-
-function Editor({ round, file, onFile }) {
-  return (
-    <div className="editor">
-      <div className="editor-bar">
-        <div className="files" aria-label="Доступные файлы">
-          {round.files.map(item => (
-            <button key={item.id} type="button" aria-pressed={item.id === file.id} onClick={() => onFile(item.id)}>{item.name}</button>
-          ))}
-        </div>
-        <span id="line-count">{file.lines.length} строк</span>
-      </div>
-      <div key={file.id} className="code" tabIndex={0} aria-label="Демонстрационный фрагмент кода">
-        {file.lines.map((line, index) => (
-          <div className="code-line" key={file.start + index}>
-            <span className="line-number" aria-hidden="true">{file.start + index}</span>
-            {/* The API escapes the source and adds Pygments syntax spans. */}
-            <span className="line-text" dangerouslySetInnerHTML={{ __html: line }} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function starLabel(stars) {
@@ -209,6 +186,7 @@ function App() {
   const [round, setRound] = useState(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
+  const [hasContext, setHasContext] = useState(false);
   const finished = game.history.length;
   const score = game.history.reduce((sum, item) => sum + item.score, 0);
   const number = Math.min(TOTAL, round?.result ? finished : finished + 1);
@@ -306,14 +284,16 @@ function App() {
           ) : (
             <>
               {!round.result && <HintValues values={round.hint_values} />}
-              <Editor round={round} file={file} onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
+              <CodeExplorer key={round.id} round={round} file={file} api={api}
+                onContextAvailable={setHasContext}
+                onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
               {error && <p className="error" role="status">{error}</p>}
               {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= TOTAL} score={score} onNext={next} /> : (
                 <>
                   <div className="hints">
                     {hints.map(([kind, label]) => (
                       <button key={kind} type="button" onClick={() => act("hint", { kind })}
-                        disabled={pending || round.hints[kind] || (kind === "context" && !file.has_context)}>
+                        disabled={pending || round.hints[kind] || (kind === "context" && !hasContext)}>
                         {label} <span>{round.hints[kind] ? "✓" : `−${round.hint_costs[kind]}`}</span>
                       </button>
                     ))}

@@ -10,6 +10,7 @@ from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
 
 from app.schemas.game import STAR_BANDS, Guess
+from app.services.call_graph import entry_node, make_call_graph
 
 POINTS = {"repository": 5000, "year": 2000, "languages": 1000, "stars": 750}
 REGION_HINT_COST = 1000
@@ -48,6 +49,7 @@ def make_snapshot(repo: dict, country: dict, demo: dict) -> dict:
             "context_start": context_start + 1,
             "start": start + 1,
             "lines": highlighted[context_start:start + SNIPPET_LENGTH],
+            "full_lines": highlight(source, lexer, HtmlFormatter(nowrap=True)).splitlines(),
         })
     return {
         "year": demo["year"],
@@ -56,6 +58,7 @@ def make_snapshot(repo: dict, country: dict, demo: dict) -> dict:
         "x": country["x"],
         "y": country["y"],
         "files": files,
+        "call_graph": make_call_graph(demo),
     }
 
 
@@ -74,6 +77,7 @@ def public_round(round_: GameRound) -> dict:
         "files": [
             {
                 "id": index,
+                "entry_node_id": entry_node(round_.snapshot, index),
                 "name": file["path"] if hints.get("path") or round_.result else f"Файл {index + 1:02d}",
                 "start": file["context_start"] if hints.get("context") else file["start"],
                 "lines": file["lines"] if hints.get("context") else file["lines"][file["start"] - file["context_start"]:],
