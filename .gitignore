@@ -21,3 +21,6 @@ htmlcov/
 # Build artifacts
 build/
 dist/
+
+# Node
+node_modules/

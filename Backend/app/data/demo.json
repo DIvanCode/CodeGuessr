@@ -1,0 +1,86 @@
+{
+  "1": {
+    "year": 2011,
+    "sources": [
+      "static int copy_resources(struct task_struct *child)\n{\n    struct mm_struct *mm;\n    int error = -ENOMEM;\n\n    mm = dup_mm(child, current->mm);\n    if (!mm)\n        return error;\n\n    child->mm = mm;\n    child->active_mm = mm;\n    return 0;\n}\n\nstatic void queue_new_task(struct task_struct *task)\n{\n    raw_spin_lock(&task->pi_lock);\n    task->__state = TASK_RUNNING;\n    enqueue_task(task_rq(task), task, ENQUEUE_WAKEUP);\n    raw_spin_unlock(&task->pi_lock);\n}",
+      "static void *take_free_object(struct kmem_cache *cache)\n{\n    struct slab *slab = cache->active;\n    void *object = slab->freelist;\n\n    if (!object)\n        return refill_cpu_cache(cache);\n\n    slab->freelist = get_freepointer(cache, object);\n    slab->inuse++;\n    return object;\n}\n\nstatic void release_partial_slab(struct slab *slab)\n{\n    if (slab->inuse == 0)\n        discard_slab(slab);\n}"
+    ]
+  },
+  "2": {
+    "year": 2009,
+    "sources": [
+      "static unsigned long slot_for(const dict *table, const void *key)\n{\n    const uint64_t hash = table->type->hashFunction(key);\n    return hash & (table->size - 1);\n}\n\nstatic dictEntry *lookup(dict *table, const void *key)\n{\n    unsigned long slot = slot_for(table, key);\n    for (dictEntry *entry = table->buckets[slot]; entry;\n         entry = entry->next) {\n        if (table->type->keyCompare(key, entry->key))\n            return entry;\n    }\n\n    return NULL;\n}",
+      "static void push_element(client *c, robj *list, robj *value)\n{\n    quicklist *items = list->ptr;\n    int where = c->cmd->proc == lpushCommand\n        ? QUICKLIST_HEAD\n        : QUICKLIST_TAIL;\n\n    quicklistPush(items, value->ptr, sdslen(value->ptr), where);\n    signalModifiedKey(c, c->db, c->argv[1]);\n    notifyKeyspaceEvent(NOTIFY_LIST, \"push\", c->argv[1], c->db->id);\n    addReplyLongLong(c, quicklistCount(items));\n}"
+    ]
+  },
+  "13": {
+    "year": 2014,
+    "sources": [
+      "void SceneTree::queue_attach(Node *parent, Node *child) {\n    ERR_FAIL_NULL(parent);\n    ERR_FAIL_NULL(child);\n    pending_nodes.push_back({parent, child});\n}\n\nvoid SceneTree::flush_pending_nodes() {\n    for (const PendingNode &item : pending_nodes) {\n        if (item.child->get_parent() != nullptr) {\n            continue;\n        }\n        item.parent->add_child(item.child);\n        item.child->notification(Node::NOTIFICATION_READY);\n    }\n    pending_nodes.clear();\n}",
+      "void CanvasItem::draw_preview(const Rect2 &region, const Color &tint) {\n    ERR_FAIL_COND(!is_inside_tree());\n\n    const Transform2D local = get_global_transform();\n    const Rect2 bounds = local.xform(region);\n    RID canvas = get_canvas_item();\n\n    RenderingServer::get_singleton()->canvas_item_add_rect(\n        canvas,\n        bounds,\n        tint\n    );\n}"
+    ]
+  },
+  "21": {
+    "year": 2014,
+    "sources": [
+      "type workQueue struct {\n    owner *p\n    head  uint32\n    tail  uint32\n}\n\nfunc nextRunnable(q *workQueue) *g {\n    for {\n        head := atomic.LoadAcq(&q.head)\n        if head == q.tail {\n            return nil\n        }\n        task := q.owner.runq[head%uint32(len(q.owner.runq))].ptr()\n        if atomic.CasRel(&q.head, head, head+1) {\n            return task\n        }\n    }\n}",
+      "func makeHeader(version uint16, length int) []byte {\n    header := make([]byte, 5)\n    header[0] = recordTypeHandshake\n    header[1] = byte(version >> 8)\n    header[2] = byte(version)\n    header[3] = byte(length >> 8)\n    header[4] = byte(length)\n    return header\n}\n\nfunc appendRecord(dst []byte, version uint16, payload []byte) []byte {\n    dst = append(dst, makeHeader(version, len(payload))...)\n    return append(dst, payload...)\n}"
+    ]
+  },
+  "22": {
+    "year": 2014,
+    "sources": [
+      "func matchingNodes(pod *v1.Pod, nodes []*v1.Node) []*v1.Node {\n    eligible := make([]*v1.Node, 0, len(nodes))\n    for _, node := range nodes {\n        if node.Spec.Unschedulable {\n            continue\n        }\n        nodeLabels := labels.Set(node.Labels)\n        selector := labels.SelectorFromSet(pod.Spec.NodeSelector)\n        if selector.Matches(nodeLabels) {\n            eligible = append(eligible, node)\n        }\n    }\n    return eligible\n}",
+      "func (c *Controller) reconcile(ctx context.Context, key string) error {\n    namespace, name, err := cache.SplitMetaNamespaceKey(key)\n    if err != nil {\n        return err\n    }\n\n    deployment, err := c.lister.Deployments(namespace).Get(name)\n    if apierrors.IsNotFound(err) {\n        return nil\n    }\n    if err != nil {\n        return err\n    }\n    return c.ensureReplicaSet(ctx, deployment)\n}"
+    ]
+  },
+  "30": {
+    "year": 2010,
+    "sources": [
+      "fn collect_bindings<'hir>(pattern: &'hir hir::Pat<'hir>) -> Vec<HirId> {\n    let mut bindings = Vec::new();\n\n    pattern.walk(|pat| {\n        if let hir::PatKind::Binding(_, id, _, _) = pat.kind {\n            bindings.push(id);\n        }\n        true\n    });\n\n    bindings.sort_unstable();\n    bindings.dedup();\n    bindings\n}",
+      "fn register_type<'tcx>(cx: &mut TypeContext<'tcx>, ty: Ty<'tcx>) -> TypeId {\n    if let Some(&id) = cx.ids.get(&ty) {\n        return id;\n    }\n    let id = TypeId::from_usize(cx.types.len());\n    cx.types.push(ty);\n    cx.ids.insert(ty, id);\n    id\n}\n\nfn find_type(cx: &TypeContext<'_>, id: TypeId) -> Option<Ty<'_>> {\n    cx.types.get(id.index()).copied()\n}"
+    ]
+  },
+  "43": {
+    "year": 2018,
+    "sources": [
+      "from inspect import signature\nfrom starlette.responses import JSONResponse\n\ndef build_endpoint(handler, response_model=None):\n    parameters = signature(handler).parameters\n    dependant = get_dependant(call=handler, path=\"/\")\n\n    async def endpoint(request):\n        solved = await solve_dependencies(\n            request=request,\n            dependant=dependant,\n            body=await request.json(),\n        )\n        if solved.errors:\n            raise RequestValidationError(solved.errors)\n        result = await handler(**solved.values)\n        data = serialize_response(response_model, result)\n        return JSONResponse(data)\n\n    return endpoint",
+      "def describe_operation(route, schema):\n    operation = {\n        \"summary\": route.summary or route.name.replace(\"_\", \" \"),\n        \"operationId\": route.unique_id,\n        \"responses\": {},\n    }\n\n    for status, model in route.response_models.items():\n        operation[\"responses\"][str(status)] = {\n            \"description\": \"Successful Response\",\n            \"content\": {\n                \"application/json\": {\"schema\": schema(model)},\n            },\n        }\n\n    return operation"
+    ]
+  },
+  "44": {
+    "year": 2016,
+    "sources": [
+      "import torch\nfrom torch import Tensor\n\ndef normalize_batch(values: Tensor, eps: float = 1e-5) -> Tensor:\n    if values.ndim < 2:\n        raise ValueError(\"Expected a batch with a channel dimension\")\n\n    reduce = (0, *range(2, values.ndim))\n    mean = values.mean(dim=reduce, keepdim=True)\n    variance = values.var(dim=reduce, keepdim=True, unbiased=False)\n    scale = torch.rsqrt(variance + eps)\n    return (values - mean) * scale\n\ndef loss(logits: Tensor, targets: Tensor) -> Tensor:\n    return torch.nn.functional.cross_entropy(logits, targets)",
+      "def backward_nodes(output, gradients):\n    if output.grad_fn is None:\n        return\n\n    pending = [(output.grad_fn, gradients)]\n    while pending:\n        node, upstream = pending.pop()\n        downstream = node.apply(*upstream)\n        for (edge, index), grad in zip(node.next_functions, downstream):\n            if edge is not None and grad is not None:\n                pending.append((edge, (grad,)))"
+    ]
+  },
+  "48": {
+    "year": 2010,
+    "sources": [
+      "def align_rows(left, right, fill_value=None):\n    index = left.index.union(right.index, sort=False)\n    left_indexer = left.index.get_indexer(index)\n    right_indexer = right.index.get_indexer(index)\n\n    left_values = take_with_fill(left, left_indexer, fill_value)\n    right_values = take_with_fill(right, right_indexer, fill_value)\n    return left_values, right_values, index\n\ndef group_values(frame, key):\n    codes, uniques = factorize(frame[key], sort=False)\n    for code, label in enumerate(uniques):\n        yield label, frame.iloc[codes == code]",
+      "def rolling_mean(values, window):\n    if window <= 0:\n        raise ValueError(\"window must be positive\")\n\n    series = Series(values, copy=False)\n    valid = series.notna()\n    counts = valid.cumsum()\n    totals = series.fillna(0).cumsum()\n\n    sums = totals - totals.shift(window, fill_value=0)\n    counts = counts - counts.shift(window, fill_value=0)\n    return sums.div(counts.where(counts > 0))"
+    ]
+  },
+  "52": {
+    "year": 2013,
+    "sources": [
+      "const idlePriority = 5;\n\nfunction scheduleCallback(root, callback, priority) {\n  const expiration = priority === idlePriority ? Infinity : now() + 250;\n  const task = {root, callback, expiration};\n  taskQueue.push(task);\n  requestHostCallback(flushWork);\n  return task;\n}\n\nfunction flushWork(deadline) {\n  while (taskQueue.length && deadline.timeRemaining() > 0) {\n    const task = taskQueue.shift();\n    const continuation = task.callback();\n    if (typeof continuation === 'function') {\n      task.callback = continuation;\n      taskQueue.unshift(task);\n      break;\n    }\n  }\n}",
+      "function reconcileChildren(current, workInProgress, nextChildren, lanes) {\n  if (current === null) {\n    workInProgress.child = mountChildFibers(workInProgress, null, nextChildren, lanes);\n    return;\n  }\n\n  const previousChildren = current.child;\n  workInProgress.child = reconcileChildFibers(\n    workInProgress,\n    previousChildren,\n    nextChildren,\n    lanes,\n  );\n}"
+    ]
+  },
+  "53": {
+    "year": 2015,
+    "sources": [
+      "interface Edit {\n  start: number;\n  end: number;\n  text: string;\n}\n\nfunction applyEdits(buffer: TextBuffer, edits: readonly Edit[]): void {\n  const ordered = [...edits].sort((a, b) => b.start - a.start);\n  for (const edit of ordered) {\n    const removed = edit.end - edit.start;\n    buffer.delete(edit.start, removed);\n    if (edit.text.length > 0) {\n      buffer.insert(edit.start, edit.text);\n    }\n  }\n}",
+      "function resolveCommands(registry: CommandRegistry, prefix: string): QuickPickItem[] {\n  const normalized = prefix.trim().toLowerCase();\n  const result: QuickPickItem[] = [];\n\n  for (const command of registry.getCommands()) {\n    const label = command.title ?? command.id;\n    if (!label.toLowerCase().includes(normalized)) {\n      continue;\n    }\n    result.push({ label, description: command.id });\n  }\n\n  return result;\n}"
+    ]
+  },
+  "91": {
+    "year": 2015,
+    "sources": [
+      "class StatusBadge extends StatelessWidget {\n  const StatusBadge({super.key, required this.label});\n\n  final String label;\n\n  @override\n  Widget build(BuildContext context) {\n    final colors = Theme.of(context).colorScheme;\n    return DecoratedBox(\n      decoration: BoxDecoration(\n        color: colors.secondaryContainer,\n        borderRadius: BorderRadius.circular(12),\n      ),\n      child: Padding(\n        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),\n        child: Text(label),\n      ),\n    );\n  }\n}",
+      "class _SelectionState extends State<SelectionList> {\n  int _selected = 0;\n\n  @override\n  Widget build(BuildContext context) {\n    return ListView.builder(\n      itemCount: widget.items.length,\n      itemBuilder: (context, index) {\n        return ListTile(\n          title: Text(widget.items[index]),\n          selected: index == _selected,\n          onTap: () => setState(() => _selected = index),\n        );\n      },\n    );\n  }\n}"
+    ]
+  }
+}

@@ -1,40 +1,27 @@
 name: codeguessr
 
 services:
-  db:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-codeguessr}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codeguessr_dev}
-      POSTGRES_DB: ${POSTGRES_DB:-codeguessr}
+  backend:
+    build: ./Backend
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
+      interval: 3s
       timeout: 5s
       retries: 10
 
-  backend:
-    build: ./Backend
-    restart: unless-stopped
+  frontend:
+    build: ./Frontend
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-codeguessr}:${POSTGRES_PASSWORD:-codeguessr_dev}@db:5432/${POSTGRES_DB:-codeguessr}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      API_TARGET: http://backend:8000
     ports:
-      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
     depends_on:
-      db:
+      backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
-      interval: 10s
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/api/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 3s
       timeout: 5s
-      retries: 5
-      start_period: 20s
-
-volumes:
-  postgres_data:
+      retries: 10
