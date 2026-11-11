@@ -6,6 +6,7 @@ on:
       - "Backend/**"
       - "Frontend/**"
       - "compose.yaml"
+      - "Caddyfile"
       - ".env.example"
       - ".github/workflows/backend-ci.yml"
   push:
@@ -14,6 +15,7 @@ on:
       - "Backend/**"
       - "Frontend/**"
       - "compose.yaml"
+      - "Caddyfile"
       - ".env.example"
       - ".github/workflows/backend-ci.yml"
 
@@ -36,9 +38,11 @@ jobs:
       - name: Start and smoke-test containers
         run: |
           docker compose up -d --build --wait
-          curl --fail --silent http://127.0.0.1:8000/api/ping
-          curl --fail --silent http://127.0.0.1:8000/api/health/ready
-          curl --fail --silent --retry 8 --retry-connrefused http://127.0.0.1:5173/api/map > /dev/null
+          # Caddy uses a local CA for localhost; --insecure is only for CI.
+          curl --insecure --fail --silent --show-error --retry 15 --retry-delay 2 --retry-all-errors https://localhost/api/ping
+          curl --insecure --fail --silent --show-error https://localhost/api/health/ready
+          curl --insecure --fail --silent --show-error https://localhost/api/map > /dev/null
+          curl --insecure --fail --silent --show-error https://localhost/ | grep -qi '<html'
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --no-color
