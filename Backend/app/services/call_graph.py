@@ -1,10 +1,10 @@
 """Call relationships curated alongside the demo sources (not a repository index)."""
 
 
-def make_call_graph(demo: dict) -> dict:
+def make_call_graph(functions_by_file: list[list[dict]]) -> dict:
     nodes = []
     definitions = {}
-    for file_id, functions in enumerate(demo["functions"]):
+    for file_id, functions in enumerate(functions_by_file):
         for function in functions:
             node = {**function, "id": f"n{len(nodes)}", "file_id": file_id}
             nodes.append(node)
@@ -24,8 +24,10 @@ def make_call_graph(demo: dict) -> dict:
     return {"nodes": {node["id"]: node for node in nodes}, "edges": sorted(edges)}
 
 
-def entry_node(snapshot: dict, file_id: int) -> str:
+def entry_node(snapshot: dict, file_id: int) -> str | None:
     nodes = [node for node in snapshot["call_graph"]["nodes"].values() if node["file_id"] == file_id]
+    if not nodes:
+        return None
     line = snapshot["files"][file_id]["start"]
     # Prefer the innermost function containing the initial clue.
     containing = [node for node in nodes if node["start"] <= line <= node["end"]]

@@ -46,7 +46,10 @@ def demo_sources(repo: dict, demo: dict) -> list[SourceFile]:
     ]
 
 
-def make_snapshot(repo: dict, country: dict, year: int, sources: list[SourceFile]) -> dict:
+def make_snapshot(
+    repo: dict, country: dict, year: int, sources: list[SourceFile],
+    *, functions: list[list[dict]] | None = None,
+) -> dict:
     files = []
     for source in sources:
         lines = source.text.splitlines()
@@ -64,8 +67,11 @@ def make_snapshot(repo: dict, country: dict, year: int, sources: list[SourceFile
             "context_start": context_start + 1,
             "start": start + 1,
             "lines": highlighted[context_start:start + SNIPPET_LENGTH],
-            "full_lines": highlight(source, lexer, HtmlFormatter(nowrap=True)).splitlines(),
         })
+        if functions is not None:
+            files[-1]["full_lines"] = highlight(
+                source.text, lexer, HtmlFormatter(nowrap=True)
+            ).split("\n")
     return {
         "year": year,
         **{key: repo[key] for key in ("full_name", "region", "stars", "size_mb", "languages")},
@@ -73,7 +79,7 @@ def make_snapshot(repo: dict, country: dict, year: int, sources: list[SourceFile
         "x": country["x"],
         "y": country["y"],
         "files": files,
-        "call_graph": make_call_graph(demo),
+        "call_graph": make_call_graph(functions or []),
     }
 
 

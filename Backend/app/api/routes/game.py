@@ -97,7 +97,7 @@ async def demo_snapshot(exclude: list[int]) -> tuple[dict, list[dict]]:
     country = next(item for item in atlas()["repositories"] if item["id"] == repo["id"])
     demo = demos[str(repo["id"])]
     return make_snapshot(
-        repo, country, demo["year"], demo_sources(repo, demo)
+        repo, country, demo["year"], demo_sources(repo, demo), functions=demo.get("functions")
     ), atlas()["repositories"]
 
 
@@ -151,8 +151,13 @@ async def hint(round_id: UUID, payload: HintRequest, request: Request) -> dict:
     round_ = load_round(request, round_id)
     if round_.result is not None:
         raise HTTPException(409, "Раунд уже завершён.")
-    if payload.kind == "context" and not any(
-        file["start"] > file["context_start"] for file in round_.snapshot["files"]
+    if payload.kind == "context" and not (
+        any(file["start"] > file["context_start"] for file in round_.snapshot["files"])
+        or any(
+            node["start"] > 1
+            for node in round_.snapshot["call_graph"]["nodes"].values()
+            if node["file_id"] is not None
+        )
     ):
         raise HTTPException(409, "Для этих файлов нет дополнительных строк.")
     round_.hints[payload.kind] = True

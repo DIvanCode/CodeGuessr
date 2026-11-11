@@ -91,7 +91,7 @@ function Editor({ round, file, onFile }) {
         </div>
         <span id="line-count">{file.lines.length} строк</span>
       </div>
-      <div key={file.id} className="code" tabIndex={0} aria-label="Демонстрационный фрагмент кода">
+      <div key={file.id} className="code" tabIndex={0} aria-label="Фрагмент кода">
         {file.lines.map((line, index) => (
           <div className="code-line" key={file.start + index}>
             <span className="line-number" aria-hidden="true">{file.start + index}</span>
@@ -248,6 +248,11 @@ function App() {
   const score = game.history.reduce((sum, item) => sum + item.score, 0);
   const number = Math.min(total, round?.result ? finished : finished + 1);
   const file = round?.files[game.fileId] ?? round?.files[0];
+  const hasGraph = file?.entry_node_id != null;
+
+  function selectFile(fileId) {
+    setGame(previous => ({ ...previous, fileId }));
+  }
 
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(game)); } catch { /* Play without browser storage. */ }
@@ -374,16 +379,19 @@ function App() {
           ) : (
             <>
               {!round.result && <HintValues values={round.hint_values} />}
-              <CodeExplorer key={round.id} round={round} file={file} api={api}
-                onContextAvailable={setHasContext}
-                onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
+              {hasGraph ? (
+                <CodeExplorer key={round.id} round={round} file={file} api={api}
+                  onContextAvailable={setHasContext} onFile={selectFile} />
+              ) : (
+                <Editor key={round.id} round={round} file={file} onFile={selectFile} />
+              )}
               {error && <p className="error" role="status">{error}</p>}
               {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
                 <>
                   <div className="hints">
                     {hints.map(([kind, label]) => (
                       <button key={kind} type="button" onClick={() => act("hint", { kind })}
-                        disabled={pending || round.hints[kind] || (kind === "context" && !hasContext)}>
+                        disabled={pending || round.hints[kind] || (kind === "context" && !(hasGraph ? hasContext : file.has_context))}>
                         {label} <span>{round.hints[kind] ? "✓" : `−${round.hint_costs[kind]}`}</span>
                       </button>
                     ))}

@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CallGraph } from "./CallGraph.jsx";
 
 export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
-  const [selection, setSelection] = useState({ nodeId: file.entry_node_id, scrollTop: 0, scrollLeft: 0, expanded: {} });
+  const [selection, setSelection] = useState({ nodeId: file.entry_node_id, scrollTop: 0, scrollLeft: 0 });
   const positions = useRef({});
   const cache = useRef(new Map());
   const [view, setView] = useState(null);
@@ -14,9 +14,8 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
   const version = `${round.id}:${Boolean(round.hints.context)}:${Boolean(round.hints.path)}:${Boolean(round.result)}`;
   const key = `${version}:${selection.nodeId}`;
   const cached = cache.current.get(key);
-  const graph = cached ?? view?.graph;
+  const graph = cached ?? view;
   const isCurrent = Boolean(cached);
-  const displayedSelection = isCurrent ? selection : view?.selection;
 
   useEffect(() => {
     onContextAvailable(isCurrent && Boolean(graph?.source?.has_context));
@@ -26,14 +25,14 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
     const controller = new AbortController();
     setError("");
     if (cache.current.has(key)) {
-      setView({ graph: cache.current.get(key), selection });
+      setView(cache.current.get(key));
       return;
     }
     api(`/rounds/${round.id}/graph/${selection.nodeId}`, undefined, controller.signal)
       .then(value => {
         if (!controller.signal.aborted) {
           cache.current.set(key, value);
-          setView({ graph: value, selection });
+          setView(value);
         }
       })
       .catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
@@ -49,9 +48,9 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
 
   function navigate(nodeId) {
     if (!isCurrent || nodeId === selection.nodeId) return;
-    setView({ graph, selection });
+    setView(graph);
     setError("");
-    setSelection({ nodeId, scrollTop: 0, scrollLeft: 0, expanded: {} });
+    setSelection({ nodeId, scrollTop: 0, scrollLeft: 0 });
   }
 
   function chooseFile(item) {
@@ -61,9 +60,9 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
       scrollTop: isCurrent ? code.current?.scrollTop ?? selection.scrollTop : selection.scrollTop,
       scrollLeft: isCurrent ? code.current?.scrollLeft ?? selection.scrollLeft : selection.scrollLeft,
     };
-    if (isCurrent) setView({ graph, selection });
+    if (isCurrent) setView(graph);
     setError("");
-    setSelection(positions.current[item.id] ?? { nodeId: item.entry_node_id, scrollTop: 0, scrollLeft: 0, expanded: {} });
+    setSelection(positions.current[item.id] ?? { nodeId: item.entry_node_id, scrollTop: 0, scrollLeft: 0 });
     onFile(item.id);
   }
 
@@ -83,8 +82,7 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
       {error && <div className="graph-message" role="alert"><p>{error}</p><button type="button" onClick={() => setRetry(value => value + 1)}>Повторить</button></div>}
       {!graph ? !error && <div className="graph-message" role="status">Загружаем связи…</div> : (
           <>
-            <CallGraph graph={graph} onNavigate={navigate} expanded={displayedSelection.expanded} disabled={!isCurrent}
-              onExpand={side => setSelection(previous => ({ ...previous, expanded: { ...previous.expanded, [side]: !previous.expanded[side] } }))} />
+            <CallGraph key={`${file.id}:${graph.node.id}`} graph={graph} onNavigate={navigate} disabled={!isCurrent} />
             <div className="source-bar" aria-live="polite"><strong>{graph.node.name}</strong><span>{source ? `${source.name} · ${source.lines.length} строк` : "Исходник вне демо"}</span></div>
             {source ? <div ref={code} key={graph.node.id} className="code" tabIndex={0} aria-label={`Код ${graph.node.name}`}>
               {source.lines.map((line, index) => <div className="code-line" key={source.start + index}>
