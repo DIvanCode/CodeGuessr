@@ -10,6 +10,7 @@ from pygments.lexers.special import TextLexer
 from pygments.util import ClassNotFound
 
 from app.schemas.game import STAR_BANDS, Guess
+from app.services.call_graph import entry_node, make_call_graph
 
 POINTS = {"repository": 5000, "year": 2000, "languages": 1000, "stars": 750}
 REGION_HINT_COST = 1000
@@ -26,36 +27,53 @@ CONTEXT_LENGTH = 8
 class GameRound:
     id: UUID
     snapshot: dict
+    repositories: list[dict]
     hints: dict = field(default_factory=dict)
     result: dict | None = None
 
 
-def make_snapshot(repo: dict, country: dict, demo: dict) -> dict:
+@dataclass
+class SourceFile:
+    path: str
+    text: str
+    start: int
+
+
+def demo_sources(repo: dict, demo: dict) -> list[SourceFile]:
+    return [
+        SourceFile(path=path, text=text, start=min(CONTEXT_LENGTH, max(0, len(text.splitlines()) - 9)))
+        for path, text in zip(repo["challenges"][0]["paths"], demo["sources"], strict=True)
+    ]
+
+
+def make_snapshot(repo: dict, country: dict, year: int, sources: list[SourceFile]) -> dict:
     files = []
-    for path, source in zip(repo["challenges"][0]["paths"], demo["sources"], strict=True):
-        lines = source.splitlines()
-        start = min(CONTEXT_LENGTH, max(0, len(lines) - 9))
+    for source in sources:
+        lines = source.text.splitlines()
+        start = source.start
         context_start = max(0, start - CONTEXT_LENGTH)
         try:
-            lexer = get_lexer_for_filename(path, stripnl=False)
+            lexer = get_lexer_for_filename(source.path, stripnl=False)
         except ClassNotFound:
             lexer = TextLexer(stripnl=False)
         code = "\n".join(line[:500] for line in lines[: start + SNIPPET_LENGTH])
         highlighted = highlight(code, lexer, HtmlFormatter(nowrap=True)).split("\n")
         files.append({
-            "path": path,
+            "path": source.path,
             "ref": repo["branch"],
             "context_start": context_start + 1,
             "start": start + 1,
             "lines": highlighted[context_start:start + SNIPPET_LENGTH],
+            "full_lines": highlight(source, lexer, HtmlFormatter(nowrap=True)).splitlines(),
         })
     return {
-        "year": demo["year"],
+        "year": year,
         **{key: repo[key] for key in ("full_name", "region", "stars", "size_mb", "languages")},
         "repository_id": repo["id"],
         "x": country["x"],
         "y": country["y"],
         "files": files,
+        "call_graph": make_call_graph(demo),
     }
 
 
@@ -74,6 +92,7 @@ def public_round(round_: GameRound) -> dict:
         "files": [
             {
                 "id": index,
+                "entry_node_id": entry_node(round_.snapshot, index),
                 "name": file["path"] if hints.get("path") or round_.result else f"Файл {index + 1:02d}",
                 "start": file["context_start"] if hints.get("context") else file["start"],
                 "lines": file["lines"] if hints.get("context") else file["lines"][file["start"] - file["context_start"]:],
