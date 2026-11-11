@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,6 +9,11 @@ Percentage = Annotated[int, Field(strict=True, ge=1, le=100)]
 
 class RoundRequest(BaseModel):
     exclude: list[int] = Field(default_factory=list, max_length=20)
+    world: UUID | None = None
+
+
+class WorldRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=200)
 
 
 class Pin(BaseModel):
