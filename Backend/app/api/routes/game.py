@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.schemas.game import Guess, HintRequest, RoundRequest, WorldRequest
 from app.services.atlas import atlas
 from app.services.catalog import catalog, demo_repositories
+from app.services.call_graph import neighborhood
 from app.services.github import GitHubError, OwnerNotFound, RateLimited, parse_owner
 from app.services.rounds import GameRound, demo_sources, grade, make_snapshot, public_round
 from app.services.worlds import World, build_world, world_challenge
@@ -132,6 +133,14 @@ async def hint(round_id: UUID, payload: HintRequest, request: Request) -> dict:
         raise HTTPException(409, "Для этих файлов нет дополнительных строк.")
     round_.hints[payload.kind] = True
     return public_round(round_)
+
+
+@router.get("/rounds/{round_id}/graph/{node_id}")
+async def get_call_graph(round_id: UUID, node_id: str, request: Request) -> dict:
+    round_ = load_round(request, round_id)
+    if node_id not in round_.snapshot["call_graph"]["nodes"]:
+        raise HTTPException(404, "Функция не найдена в этом раунде.")
+    return neighborhood(round_, node_id)
 
 
 @router.post("/rounds/{round_id}/guess")
