@@ -38,7 +38,7 @@ function Marker({ point, correct = false }) {
   );
 }
 
-export function Atlas({ data, enabled, selected, pin, result, hint, onChoose }) {
+export function Atlas({ data, byLanguage, enabled, selected, pin, result, hint, onChoose }) {
   const svg = useRef(null);
   const drag = useRef(null);
   const [view, setView] = useState(BASE);
@@ -151,7 +151,7 @@ export function Atlas({ data, enabled, selected, pin, result, hint, onChoose }) 
         <svg
           ref={svg} id="map" className={dragging ? "dragging" : ""} role="img"
           viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
-          aria-label="Шесть тематических материков. Каждая страна — один репозиторий."
+          aria-label={`${byLanguage ? "Материки по основному языку" : "Шесть тематических материков"}. Каждая страна — один репозиторий.`}
           onPointerDown={pointerDown} onPointerMove={pointerMove}
           onPointerUp={pointerUp} onPointerCancel={endDrag} onPointerLeave={() => setTooltip(null)}
         >
@@ -222,7 +222,7 @@ export function Atlas({ data, enabled, selected, pin, result, hint, onChoose }) 
         {hintRegion && !result && <div className="map-region">{hintRegion.name}</div>}
       </div>
       <footer className="legend">
-        <span><b>Материк</b> — тематика проекта</span>
+        <span><b>Материк</b> — {byLanguage ? "основной язык" : "тематика проекта"}</span>
         <span><b>Страна</b> — его репозиторий</span>
         <span><b>Клик</b> выбирает страну, а <b>колесо</b> меняет масштаб</span>
       </footer>

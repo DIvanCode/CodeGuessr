@@ -55,10 +55,8 @@ def center(polygon: list[Point]) -> dict:
     return {key: round(sum(point[axis] for point in polygon) / len(polygon), 2) for axis, key in enumerate(("x", "y"))}
 
 
-@cache
-def atlas() -> dict:
+def build_atlas(data: dict) -> dict:
     regions, repositories = [], []
-    data = catalog()
     for region in data["regions"]:
         outline = [tuple(point) for point in region["outline"]]
         regions.append({**region, **center(outline)})
@@ -80,3 +78,8 @@ def atlas() -> dict:
         "repositories": sorted(repositories, key=lambda repo: repo["id"]),
         "language_options": languages,
     }
+
+
+@cache
+def atlas() -> dict:
+    return build_atlas(catalog())
