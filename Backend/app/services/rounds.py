@@ -27,24 +27,39 @@ CONTEXT_LENGTH = 8
 class GameRound:
     id: UUID
     snapshot: dict
+    repositories: list[dict]
     hints: dict = field(default_factory=dict)
     result: dict | None = None
 
 
-def make_snapshot(repo: dict, country: dict, demo: dict) -> dict:
+@dataclass
+class SourceFile:
+    path: str
+    text: str
+    start: int
+
+
+def demo_sources(repo: dict, demo: dict) -> list[SourceFile]:
+    return [
+        SourceFile(path=path, text=text, start=min(CONTEXT_LENGTH, max(0, len(text.splitlines()) - 9)))
+        for path, text in zip(repo["challenges"][0]["paths"], demo["sources"], strict=True)
+    ]
+
+
+def make_snapshot(repo: dict, country: dict, year: int, sources: list[SourceFile]) -> dict:
     files = []
-    for path, source in zip(repo["challenges"][0]["paths"], demo["sources"], strict=True):
-        lines = source.splitlines()
-        start = min(CONTEXT_LENGTH, max(0, len(lines) - 9))
+    for source in sources:
+        lines = source.text.splitlines()
+        start = source.start
         context_start = max(0, start - CONTEXT_LENGTH)
         try:
-            lexer = get_lexer_for_filename(path, stripnl=False)
+            lexer = get_lexer_for_filename(source.path, stripnl=False)
         except ClassNotFound:
             lexer = TextLexer(stripnl=False)
         code = "\n".join(line[:500] for line in lines[: start + SNIPPET_LENGTH])
         highlighted = highlight(code, lexer, HtmlFormatter(nowrap=True)).split("\n")
         files.append({
-            "path": path,
+            "path": source.path,
             "ref": repo["branch"],
             "context_start": context_start + 1,
             "start": start + 1,
@@ -52,7 +67,7 @@ def make_snapshot(repo: dict, country: dict, demo: dict) -> dict:
             "full_lines": highlight(source, lexer, HtmlFormatter(nowrap=True)).splitlines(),
         })
     return {
-        "year": demo["year"],
+        "year": year,
         **{key: repo[key] for key in ("full_name", "region", "stars", "size_mb", "languages")},
         "repository_id": repo["id"],
         "x": country["x"],

@@ -11,7 +11,8 @@ const YEAR = new Date().getFullYear();
 const STORAGE_KEY = "codeguessr.demo.v2";
 const format = new Intl.NumberFormat("ru-RU");
 const blankDraft = () => ({ repository: "", pin: null, country: null, year: null, languages: {}, stars: null });
-const blankGame = () => ({ history: [], roundId: null, fileId: 0, draft: blankDraft() });
+const blankGame = (world = null) => ({ history: [], roundId: null, fileId: 0, draft: blankDraft(), world });
+const worldOf = map => ({ id: map.id, owner: map.owner, total: Math.min(TOTAL, map.repositories.length) });
 const emptyMap = { regions: [], repositories: [], language_options: [] };
 const hints = [
   ["context", "Показать строки выше"],
@@ -46,6 +47,61 @@ function storeResult(game, round) {
     ...game,
     history: [...game.history, { id: round.id, score: round.result.score, target: round.result.answer.repository_id }],
   };
+}
+
+function OwnerForm({ disabled, onStart }) {
+  const [link, setLink] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!link.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onStart(link.trim());
+      setLink("");
+    } catch (failure) {
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="owner-form" onSubmit={submit}>
+      <input type="text" maxLength={200} value={link} placeholder="github.com/организация или пользователь"
+        aria-label="Ссылка на пользователя или организацию GitHub" aria-describedby="owner-error"
+        onChange={event => { setLink(event.target.value); setError(""); }} />
+      <button type="submit" disabled={disabled || busy || !link.trim()}>{busy ? "Строим карту…" : "Своя карта"}</button>
+      {error && <p id="owner-error" className="owner-error" role="alert">{error}</p>}
+    </form>
+  );
+}
+
+function Editor({ round, file, onFile }) {
+  return (
+    <div className="editor">
+      <div className="editor-bar">
+        <div className="files" aria-label="Доступные файлы">
+          {round.files.map(item => (
+            <button key={item.id} type="button" aria-pressed={item.id === file.id} onClick={() => onFile(item.id)}>{item.name}</button>
+          ))}
+        </div>
+        <span id="line-count">{file.lines.length} строк</span>
+      </div>
+      <div key={file.id} className="code" tabIndex={0} aria-label="Демонстрационный фрагмент кода">
+        {file.lines.map((line, index) => (
+          <div className="code-line" key={file.start + index}>
+            <span className="line-number" aria-hidden="true">{file.start + index}</span>
+            {/* The API escapes the source and adds Pygments syntax spans. */}
+            <span className="line-text" dangerouslySetInnerHTML={{ __html: line }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function starLabel(stars) {
@@ -187,9 +243,11 @@ function App() {
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
   const [hasContext, setHasContext] = useState(false);
+  
+  const total = game.world?.total ?? TOTAL;
   const finished = game.history.length;
   const score = game.history.reduce((sum, item) => sum + item.score, 0);
-  const number = Math.min(TOTAL, round?.result ? finished : finished + 1);
+  const number = Math.min(total, round?.result ? finished : finished + 1);
   const file = round?.files[game.fileId] ?? round?.files[0];
 
   useEffect(() => {
@@ -198,24 +256,38 @@ function App() {
 
   useEffect(() => { load(game); }, []);
 
-  async function load(initial) {
+  async function loadMap(current) {
+    const id = current.world?.id ?? null;
+    if (data.repositories.length && (data.id ?? null) === id) return [data, current];
+    if (!current.world) return [await api("/map"), current];
+    try {
+      return [await api(`/worlds/${id}`), current];
+    } catch (failure) {
+      if (failure.status !== 404) throw failure;
+    }
+    const rebuilt = await api("/worlds", { url: current.world.owner });
+    return [rebuilt, { ...current, world: worldOf(rebuilt) }];
+  }
+
+  async function load(initial, preloadedMap = null) {
     setPending(true);
     setRound(null);
     setError("");
     try {
-      const map = data.repositories.length ? data : await api("/map");
+      const [map, withMap] = preloadedMap ? [preloadedMap, initial] : await loadMap(initial);
       setData(map);
-      let current = initial;
+      let current = withMap;
+      const rounds = current.world?.total ?? TOTAL;
       let loaded;
       if (current.roundId) {
         try {
           loaded = await api(`/rounds/${current.roundId}`);
         } catch (failure) {
           if (failure.status !== 404) throw failure;
-          current = current.history.length >= TOTAL ? blankGame() : { ...current, roundId: null, fileId: 0, draft: blankDraft() };
+          current = current.history.length >= rounds ? blankGame(current.world) : { ...current, roundId: null, fileId: 0, draft: blankDraft() };
         }
       }
-      loaded ??= await api("/rounds", { exclude: current.history.map(item => item.target) });
+      loaded ??= await api("/rounds", { exclude: current.history.map(item => item.target), world: current.world?.id });
       setRound(loaded);
       setGame(storeResult({ ...current, roundId: loaded.id }, loaded));
     } catch (failure) {
@@ -255,7 +327,20 @@ function App() {
   }
 
   function next() {
-    const newGame = finished >= TOTAL ? blankGame() : { ...game, roundId: null, fileId: 0, draft: blankDraft() };
+    const newGame = finished >= total ? blankGame(game.world) : { ...game, roundId: null, fileId: 0, draft: blankDraft() };
+    setGame(newGame);
+    load(newGame);
+  }
+
+  async function startWorld(link) {
+    const map = await api("/worlds", { url: link });
+    const newGame = blankGame(worldOf(map));
+    setGame(newGame);
+    await load(newGame, map);
+  }
+
+  function leaveWorld() {
+    const newGame = blankGame();
     setGame(newGame);
     load(newGame);
   }
@@ -264,17 +349,23 @@ function App() {
     <>
       <header className="topbar">
         <div className="logo">CODE<span>GUESSR</span></div>
-        <div className="rounds" aria-label={`Завершено раундов: ${finished} из ${TOTAL}`}>
-          {Array.from({ length: TOTAL }, (_, index) => <span aria-hidden="true" key={index}
+        <div className="rounds" aria-label={`Завершено раундов: ${finished} из ${total}`}>
+          {Array.from({ length: total }, (_, index) => <span aria-hidden="true" key={index}
             className={`round-dot${index < finished ? " done" : index === finished ? " current" : ""}`} />)}
         </div>
+        <OwnerForm disabled={pending} onStart={startWorld} />
         <div className="total">Очки <strong>{format.format(score)}</strong></div>
       </header>
       <main className="layout">
         <section className="game" aria-labelledby="round-label">
           <div className="round-heading">
-            <h1 id="round-label">Раунд {number} из {TOTAL} · Откуда этот код?</h1>
-            <span className="demo-badge">Демо</span>
+            <h1 id="round-label">Раунд {number} из {total} · Откуда этот код?</h1>
+            {game.world ? (
+              <span className="world-badge">
+                <a className="demo-badge" href={`https://github.com/${game.world.owner}`} target="_blank" rel="noreferrer">@{game.world.owner}</a>
+                <button type="button" className="demo-badge" disabled={pending} onClick={leaveWorld}>К демо</button>
+              </span>
+            ) : <span className="demo-badge">Демо</span>}
           </div>
           {!round ? (
             <div className="loading" role="status">
@@ -288,7 +379,7 @@ function App() {
                 onContextAvailable={setHasContext}
                 onFile={fileId => setGame(previous => ({ ...previous, fileId }))} />
               {error && <p className="error" role="status">{error}</p>}
-              {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= TOTAL} score={score} onNext={next} /> : (
+              {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
                 <>
                   <div className="hints">
                     {hints.map(([kind, label]) => (
@@ -306,7 +397,7 @@ function App() {
           )}
         </section>
         <Atlas key={round?.id ?? "loading"} data={data} enabled={Boolean(round && !round.result && !pending)}
-          selected={game.draft.country} pin={game.draft.pin} result={round?.result} hint={round?.region}
+          byLanguage={Boolean(game.world)} selected={game.draft.country} pin={game.draft.pin} result={round?.result} hint={round?.region}
           onChoose={(repository, pin, country) => draft({ repository, pin, country })} />
       </main>
     </>
