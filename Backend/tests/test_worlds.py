@@ -96,7 +96,7 @@ def test_world_round_uses_repository_sources() -> None:
         assert response.status_code == 201
         round_ = response.json()
         assert len(round_["files"]) == 2
-        assert all(file["start"] > 1 and len(file["lines"]) <= 35 for file in round_["files"])
+        assert all(file["start"] > 1 and len(file["lines"]) <= 60 for file in round_["files"])
 
         result = client.post(f"/api/rounds/{round_['id']}/guess", json={
             "repository": "api", "year": 2016, "languages": {"Python": 70, "Go": 25, "Shell": 5}, "stars": 500,
@@ -108,6 +108,82 @@ def test_world_round_uses_repository_sources() -> None:
 
         exhausted = client.post("/api/rounds", json={"world": world["id"], "exclude": [1]})
         assert exhausted.status_code == 409
+
+
+@pytest.mark.parametrize(("extension", "caller", "callee"), [
+    ("py", "def play():\n    return helper() + external()\n", "def helper():\n    return 1\n"),
+    ("go", "package game\nfunc play() int { return helper() + external() }\n", "package game\nfunc helper() int { return 1 }\n"),
+    ("ts", "const play = () => helper() + external();\n", "export function helper() { return 1; }\n"),
+])
+def test_world_round_builds_graph_from_selected_files(extension, caller, callee) -> None:
+    github = FakeGitHub([remote_repo("api", "Python", 500)])
+    comment = "#" if extension == "py" else "//"
+    padding = f"{comment} Enough code lines to be selected for a round.\n" * 12
+    github.files = {
+        f"server/play.{extension}": caller + padding,
+        f"shared/helper.{extension}": callee + padding,
+    }
+    github.trees["acme/api"] = [
+        {"path": path, "type": "blob", "size": len(source)}
+        for path, source in github.files.items()
+    ]
+    with TestClient(create_app(github)) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+        response = client.post("/api/rounds", json={"world": world["id"]})
+        assert response.status_code == 201
+        round_ = response.json()
+        graph_url = f"/api/rounds/{round_['id']}/graph/"
+        entries = {
+            graph["node"]["name"]: graph
+            for file in round_["files"]
+            for graph in [client.get(graph_url + file["entry_node_id"]).json()]
+        }
+        play, helper = entries["play"], entries["helper"]
+        external = next(node for node in play["callees"] if node["name"] == "external")
+        assert set(node["name"] for node in play["callees"]) == {"helper", "external"}
+        assert helper["callers"] == [play["node"]]
+        assert helper["source"]["lines"]
+        assert helper["source"]["name"].startswith("Файл ")
+        assert client.get(graph_url + external["id"]).json()["source"] is None
+
+
+def test_world_graph_can_open_source_outside_the_initial_clues() -> None:
+    github = FakeGitHub([remote_repo("api", "Python", 500)])
+    padding = "# Additional code in the same file.\n" * 70
+    github.files = {
+        "server/play.py": "def play():\n    return helper()\n" + padding,
+        "client/other.py": "def other():\n    return 2\n" + padding,
+        "server/helpers.py": "def helper():\n    return 1\n",
+    }
+    github.trees["acme/api"] = [
+        {"path": path, "type": "blob", "size": len(source)}
+        for path, source in github.files.items()
+    ]
+    with TestClient(create_app(github)) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+        response = client.post("/api/rounds", json={"world": world["id"]})
+        assert response.status_code == 201
+        round_ = response.json()
+        assert len(round_["files"]) == 2
+        assert all(len(file["lines"]) == 60 for file in round_["files"])
+        base = f"/api/rounds/{round_['id']}"
+        entries = [
+            client.get(f"{base}/graph/{file['entry_node_id']}").json()
+            for file in round_["files"]
+        ]
+        play = next(graph for graph in entries if graph["node"]["name"] == "play")
+        assert len(play["source"]["lines"]) == 60
+        [helper] = play["callees"]
+        assert helper["name"] == "helper" and helper["has_source"]
+        helper_url = f"{base}/graph/{helper['id']}"
+        graph = client.get(helper_url).json()
+        assert graph["source"]["file_id"] not in {file["id"] for file in round_["files"]}
+        assert graph["source"]["name"] == "Файл 03"
+        assert len(graph["source"]["lines"]) == 2
+        assert graph["callers"] == [play["node"]]
+        assert client.post(f"{base}/hint", json={"kind": "context"}).status_code == 200
+        assert client.post(f"{base}/hint", json={"kind": "path"}).status_code == 200
+        assert client.get(helper_url).json()["source"]["name"] == "server/helpers.py"
 
 
 @pytest.mark.parametrize(("failure", "status"), [(OwnerNotFound("missing"), 404), (RateLimited("limit"), 503)])

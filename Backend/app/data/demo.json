@@ -2,8 +2,8 @@
   "1": {
     "year": 2011,
     "sources": [
-      "static int copy_resources(struct task_struct *child)\n{\n    struct mm_struct *mm;\n    int error = -ENOMEM;\n\n    mm = dup_mm(child, current->mm);\n    if (!mm)\n        return error;\n\n    child->mm = mm;\n    child->active_mm = mm;\n    return 0;\n}\n\nstatic void queue_new_task(struct task_struct *task)\n{\n    raw_spin_lock(&task->pi_lock);\n    task->__state = TASK_RUNNING;\n    enqueue_task(task_rq(task), task, ENQUEUE_WAKEUP);\n    raw_spin_unlock(&task->pi_lock);\n}",
-      "static void *take_free_object(struct kmem_cache *cache)\n{\n    struct slab *slab = cache->active;\n    void *object = slab->freelist;\n\n    if (!object)\n        return refill_cpu_cache(cache);\n\n    slab->freelist = get_freepointer(cache, object);\n    slab->inuse++;\n    return object;\n}\n\nstatic void release_partial_slab(struct slab *slab)\n{\n    if (slab->inuse == 0)\n        discard_slab(slab);\n}"
+      "static int copy_resources(struct task_struct *child)\n{\n    struct mm_struct *mm;\n    int error = -ENOMEM;\n\n    mm = dup_mm(child, current->mm);\n    if (!mm)\n        return error;\n\n    child->mm = mm;\n    child->active_mm = mm;\n    return 0;\n}\n\nstatic void queue_new_task(struct task_struct *task)\n{\n    raw_spin_lock(&task->pi_lock);\n    task->__state = TASK_RUNNING;\n    enqueue_task(task_rq(task), task, ENQUEUE_WAKEUP);\n    raw_spin_unlock(&task->pi_lock);\n}\n\nstatic int prepare_child(struct task_struct *child, bool runnable)\n{\n    int error = copy_resources(child);\n    if (error)\n        return error;\n\n    if (runnable)\n        queue_new_task(child);\n    else\n        child->__state = TASK_NEW;\n\n    return 0;\n}",
+      "static void *take_free_object(struct kmem_cache *cache)\n{\n    struct slab *slab = cache->active;\n    void *object = slab->freelist;\n\n    if (!object)\n        return refill_cpu_cache(cache);\n\n    slab->freelist = get_freepointer(cache, object);\n    slab->inuse++;\n    return object;\n}\n\nstatic void release_partial_slab(struct slab *slab)\n{\n    if (slab->inuse == 0)\n        discard_slab(slab);\n}\n\nstatic void *refill_cpu_cache(struct kmem_cache *cache)\n{\n    struct slab *slab = find_partial_slab(cache);\n    if (!slab)\n        slab = allocate_slab(cache);\n    if (!slab)\n        return NULL;\n\n    cache->active = slab;\n    void *object = slab->freelist;\n    if (object) {\n        slab->freelist = get_freepointer(cache, object);\n        slab->inuse++;\n    }\n    return object;\n}\n\nstatic void return_to_slab(struct kmem_cache *cache, struct slab *slab, void *object)\n{\n    set_freepointer(cache, object, slab->freelist);\n    slab->freelist = object;\n    slab->inuse--;\n    release_partial_slab(slab);\n}"
     ],
     "functions": [
       [
@@ -25,6 +25,15 @@
             "task_rq",
             "raw_spin_unlock"
           ]
+        },
+        {
+          "name": "prepare_child",
+          "start": 23,
+          "end": 35,
+          "calls": [
+            "copy_resources",
+            "queue_new_task"
+          ]
         }
       ],
       [
@@ -44,6 +53,25 @@
           "calls": [
             "discard_slab"
           ]
+        },
+        {
+          "name": "refill_cpu_cache",
+          "start": 20,
+          "end": 35,
+          "calls": [
+            "find_partial_slab",
+            "allocate_slab",
+            "get_freepointer"
+          ]
+        },
+        {
+          "name": "return_to_slab",
+          "start": 37,
+          "end": 43,
+          "calls": [
+            "set_freepointer",
+            "release_partial_slab"
+          ]
         }
       ]
     ]
@@ -51,8 +79,8 @@
   "2": {
     "year": 2009,
     "sources": [
-      "static unsigned long slot_for(const dict *table, const void *key)\n{\n    const uint64_t hash = table->type->hashFunction(key);\n    return hash & (table->size - 1);\n}\n\nstatic dictEntry *lookup(dict *table, const void *key)\n{\n    unsigned long slot = slot_for(table, key);\n    for (dictEntry *entry = table->buckets[slot]; entry;\n         entry = entry->next) {\n        if (table->type->keyCompare(key, entry->key))\n            return entry;\n    }\n\n    return NULL;\n}",
-      "static void push_element(client *c, robj *list, robj *value)\n{\n    quicklist *items = list->ptr;\n    int where = c->cmd->proc == lpushCommand\n        ? QUICKLIST_HEAD\n        : QUICKLIST_TAIL;\n\n    quicklistPush(items, value->ptr, sdslen(value->ptr), where);\n    signalModifiedKey(c, c->db, c->argv[1]);\n    notifyKeyspaceEvent(NOTIFY_LIST, \"push\", c->argv[1], c->db->id);\n    addReplyLongLong(c, quicklistCount(items));\n}"
+      "static unsigned long slot_for(const dict *table, const void *key)\n{\n    const uint64_t hash = table->type->hashFunction(key);\n    return hash & (table->size - 1);\n}\n\nstatic dictEntry *lookup(dict *table, const void *key)\n{\n    unsigned long slot = slot_for(table, key);\n    for (dictEntry *entry = table->buckets[slot]; entry;\n         entry = entry->next) {\n        if (table->type->keyCompare(key, entry->key))\n            return entry;\n    }\n\n    return NULL;\n}\n\nstatic int insert_if_missing(dict *table, void *key, void *value)\n{\n    if (lookup(table, key) != NULL)\n        return DICT_ERR;\n\n    if (table->used == table->size && expand_table(table) != DICT_OK)\n        return DICT_ERR;\n\n    unsigned long slot = slot_for(table, key);\n    dictEntry *entry = zmalloc(sizeof(*entry));\n    entry->key = key;\n    entry->value = value;\n    entry->next = table->buckets[slot];\n    table->buckets[slot] = entry;\n    table->used++;\n    return DICT_OK;\n}",
+      "static void push_element(client *c, robj *list, robj *value)\n{\n    quicklist *items = list->ptr;\n    int where = c->cmd->proc == lpushCommand\n        ? QUICKLIST_HEAD\n        : QUICKLIST_TAIL;\n\n    quicklistPush(items, value->ptr, sdslen(value->ptr), where);\n    signalModifiedKey(c, c->db, c->argv[1]);\n    notifyKeyspaceEvent(NOTIFY_LIST, \"push\", c->argv[1], c->db->id);\n    addReplyLongLong(c, quicklistCount(items));\n}\n\nstatic void push_arguments(client *c, robj *list, int first)\n{\n    if (first >= c->argc) {\n        addReplyLongLong(c, quicklistCount(list->ptr));\n        return;\n    }\n\n    for (int i = first; i < c->argc; i++) {\n        robj *value = c->argv[i];\n        if (value->type != OBJ_STRING) {\n            addReplyError(c, \"Expected a string\");\n            return;\n        }\n        push_element(c, list, value);\n    }\n}"
     ],
     "functions": [
       [
@@ -72,6 +100,17 @@
             "slot_for",
             "table.type.keyCompare"
           ]
+        },
+        {
+          "name": "insert_if_missing",
+          "start": 19,
+          "end": 35,
+          "calls": [
+            "lookup",
+            "expand_table",
+            "slot_for",
+            "zmalloc"
+          ]
         }
       ],
       [
@@ -87,6 +126,17 @@
             "addReplyLongLong",
             "quicklistCount"
           ]
+        },
+        {
+          "name": "push_arguments",
+          "start": 14,
+          "end": 29,
+          "calls": [
+            "addReplyLongLong",
+            "quicklistCount",
+            "addReplyError",
+            "push_element"
+          ]
         }
       ]
     ]
@@ -94,8 +144,8 @@
   "13": {
     "year": 2014,
     "sources": [
-      "void SceneTree::queue_attach(Node *parent, Node *child) {\n    ERR_FAIL_NULL(parent);\n    ERR_FAIL_NULL(child);\n    pending_nodes.push_back({parent, child});\n}\n\nvoid SceneTree::flush_pending_nodes() {\n    for (const PendingNode &item : pending_nodes) {\n        if (item.child->get_parent() != nullptr) {\n            continue;\n        }\n        item.parent->add_child(item.child);\n        item.child->notification(Node::NOTIFICATION_READY);\n    }\n    pending_nodes.clear();\n}",
-      "void CanvasItem::draw_preview(const Rect2 &region, const Color &tint) {\n    ERR_FAIL_COND(!is_inside_tree());\n\n    const Transform2D local = get_global_transform();\n    const Rect2 bounds = local.xform(region);\n    RID canvas = get_canvas_item();\n\n    RenderingServer::get_singleton()->canvas_item_add_rect(\n        canvas,\n        bounds,\n        tint\n    );\n}"
+      "void SceneTree::queue_attach(Node *parent, Node *child) {\n    ERR_FAIL_NULL(parent);\n    ERR_FAIL_NULL(child);\n    pending_nodes.push_back({parent, child});\n}\n\nvoid SceneTree::flush_pending_nodes() {\n    for (const PendingNode &item : pending_nodes) {\n        if (item.child->get_parent() != nullptr) {\n            continue;\n        }\n        item.parent->add_child(item.child);\n        item.child->notification(Node::NOTIFICATION_READY);\n    }\n    pending_nodes.clear();\n}\n\nvoid SceneTree::attach_children(Node *parent, const Vector<Node *> &children) {\n    if (parent == nullptr || !parent->is_inside_tree()) {\n        return;\n    }\n\n    for (Node *child : children) {\n        if (child == nullptr || child->get_parent() != nullptr) {\n            continue;\n        }\n        queue_attach(parent, child);\n    }\n\n    if (!pending_nodes.is_empty()) {\n        flush_pending_nodes();\n    }\n}",
+      "void CanvasItem::draw_preview(const Rect2 &region, const Color &tint) {\n    ERR_FAIL_COND(!is_inside_tree());\n\n    const Transform2D local = get_global_transform();\n    const Rect2 bounds = local.xform(region);\n    RID canvas = get_canvas_item();\n\n    RenderingServer::get_singleton()->canvas_item_add_rect(\n        canvas,\n        bounds,\n        tint\n    );\n}\n\nvoid CanvasItem::draw_preview_regions(const Vector<Rect2> &regions, const Color &tint) {\n    if (!is_inside_tree()) {\n        return;\n    }\n\n    const Rect2 viewport = get_viewport_rect();\n    for (const Rect2 &region : regions) {\n        const Rect2 visible = region.intersection(viewport);\n        if (!visible.has_area()) {\n            continue;\n        }\n        draw_preview(visible, tint);\n    }\n}"
     ],
     "functions": [
       [
@@ -118,6 +168,18 @@
             "Node::notification",
             "pending_nodes.clear"
           ]
+        },
+        {
+          "name": "SceneTree::attach_children",
+          "start": 18,
+          "end": 33,
+          "calls": [
+            "parent->is_inside_tree",
+            "child->get_parent",
+            "SceneTree::queue_attach",
+            "pending_nodes.is_empty",
+            "SceneTree::flush_pending_nodes"
+          ]
         }
       ],
       [
@@ -134,6 +196,18 @@
             "RenderingServer::get_singleton",
             "RenderingServer::canvas_item_add_rect"
           ]
+        },
+        {
+          "name": "CanvasItem::draw_preview_regions",
+          "start": 15,
+          "end": 28,
+          "calls": [
+            "is_inside_tree",
+            "get_viewport_rect",
+            "region.intersection",
+            "visible.has_area",
+            "CanvasItem::draw_preview"
+          ]
         }
       ]
     ]
@@ -141,8 +215,8 @@
   "21": {
     "year": 2014,
     "sources": [
-      "type workQueue struct {\n    owner *p\n    head  uint32\n    tail  uint32\n}\n\nfunc nextRunnable(q *workQueue) *g {\n    for {\n        head := atomic.LoadAcq(&q.head)\n        if head == q.tail {\n            return nil\n        }\n        task := q.owner.runq[head%uint32(len(q.owner.runq))].ptr()\n        if atomic.CasRel(&q.head, head, head+1) {\n            return task\n        }\n    }\n}",
-      "func makeHeader(version uint16, length int) []byte {\n    header := make([]byte, 5)\n    header[0] = recordTypeHandshake\n    header[1] = byte(version >> 8)\n    header[2] = byte(version)\n    header[3] = byte(length >> 8)\n    header[4] = byte(length)\n    return header\n}\n\nfunc appendRecord(dst []byte, version uint16, payload []byte) []byte {\n    dst = append(dst, makeHeader(version, len(payload))...)\n    return append(dst, payload...)\n}"
+      "type workQueue struct {\n    owner *p\n    head  uint32\n    tail  uint32\n}\n\nfunc nextRunnable(q *workQueue) *g {\n    for {\n        head := atomic.LoadAcq(&q.head)\n        if head == q.tail {\n            return nil\n        }\n        task := q.owner.runq[head%uint32(len(q.owner.runq))].ptr()\n        if atomic.CasRel(&q.head, head, head+1) {\n            return task\n        }\n    }\n}\n\nfunc drainRunnable(q *workQueue, limit int) []*g {\n    if limit <= 0 {\n        return nil\n    }\n\n    ready := make([]*g, 0, limit)\n    for len(ready) < limit {\n        task := nextRunnable(q)\n        if task == nil {\n            break\n        }\n        ready = append(ready, task)\n    }\n    return ready\n}",
+      "func makeHeader(version uint16, length int) []byte {\n    header := make([]byte, 5)\n    header[0] = recordTypeHandshake\n    header[1] = byte(version >> 8)\n    header[2] = byte(version)\n    header[3] = byte(length >> 8)\n    header[4] = byte(length)\n    return header\n}\n\nfunc appendRecord(dst []byte, version uint16, payload []byte) []byte {\n    dst = append(dst, makeHeader(version, len(payload))...)\n    return append(dst, payload...)\n}\n\nfunc appendRecords(dst []byte, version uint16, payload []byte, limit int) []byte {\n    if limit <= 0 || limit > 65535 {\n        return dst\n    }\n\n    for len(payload) > limit {\n        dst = appendRecord(dst, version, payload[:limit])\n        payload = payload[limit:]\n    }\n    if len(payload) != 0 {\n        dst = appendRecord(dst, version, payload)\n    }\n    return dst\n}"
     ],
     "functions": [
       [
@@ -154,6 +228,17 @@
             "atomic.LoadAcq",
             "ptr",
             "atomic.CasRel"
+          ]
+        },
+        {
+          "name": "drainRunnable",
+          "start": 20,
+          "end": 34,
+          "calls": [
+            "make",
+            "len",
+            "nextRunnable",
+            "append"
           ]
         }
       ],
@@ -171,6 +256,15 @@
           "calls": [
             "makeHeader"
           ]
+        },
+        {
+          "name": "appendRecords",
+          "start": 16,
+          "end": 29,
+          "calls": [
+            "len",
+            "appendRecord"
+          ]
         }
       ]
     ]
@@ -178,8 +272,8 @@
   "22": {
     "year": 2014,
     "sources": [
-      "func matchingNodes(pod *v1.Pod, nodes []*v1.Node) []*v1.Node {\n    eligible := make([]*v1.Node, 0, len(nodes))\n    for _, node := range nodes {\n        if node.Spec.Unschedulable {\n            continue\n        }\n        nodeLabels := labels.Set(node.Labels)\n        selector := labels.SelectorFromSet(pod.Spec.NodeSelector)\n        if selector.Matches(nodeLabels) {\n            eligible = append(eligible, node)\n        }\n    }\n    return eligible\n}",
-      "func (c *Controller) reconcile(ctx context.Context, key string) error {\n    namespace, name, err := cache.SplitMetaNamespaceKey(key)\n    if err != nil {\n        return err\n    }\n\n    deployment, err := c.lister.Deployments(namespace).Get(name)\n    if apierrors.IsNotFound(err) {\n        return nil\n    }\n    if err != nil {\n        return err\n    }\n    return c.ensureReplicaSet(ctx, deployment)\n}"
+      "func matchingNodes(pod *v1.Pod, nodes []*v1.Node) []*v1.Node {\n    eligible := make([]*v1.Node, 0, len(nodes))\n    for _, node := range nodes {\n        if node.Spec.Unschedulable {\n            continue\n        }\n        nodeLabels := labels.Set(node.Labels)\n        selector := labels.SelectorFromSet(pod.Spec.NodeSelector)\n        if selector.Matches(nodeLabels) {\n            eligible = append(eligible, node)\n        }\n    }\n    return eligible\n}\n\nfunc bestMatchingNode(pod *v1.Pod, nodes []*v1.Node) *v1.Node {\n    eligible := matchingNodes(pod, nodes)\n    var best *v1.Node\n    var available int64\n\n    for _, node := range eligible {\n        pods := node.Status.Allocatable.Pods().Value()\n        if best == nil || pods > available {\n            best = node\n            available = pods\n        }\n    }\n    return best\n}",
+      "func (c *Controller) reconcile(ctx context.Context, key string) error {\n    namespace, name, err := cache.SplitMetaNamespaceKey(key)\n    if err != nil {\n        return err\n    }\n\n    deployment, err := c.lister.Deployments(namespace).Get(name)\n    if apierrors.IsNotFound(err) {\n        return nil\n    }\n    if err != nil {\n        return err\n    }\n    return c.ensureReplicaSet(ctx, deployment)\n}\n\nfunc (c *Controller) ensureReplicaSet(ctx context.Context, deployment *appsv1.Deployment) error {\n    sets, err := c.replicaSetsFor(deployment)\n    if err != nil {\n        return err\n    }\n\n    for _, candidate := range sets {\n        if templatesMatch(candidate.Spec.Template, deployment.Spec.Template) {\n            return c.syncReplicas(ctx, candidate, deployment.Spec.Replicas)\n        }\n    }\n    return c.createReplicaSet(ctx, deployment)\n}"
     ],
     "functions": [
       [
@@ -191,6 +285,16 @@
             "labels.Set",
             "labels.SelectorFromSet",
             "selector.Matches"
+          ]
+        },
+        {
+          "name": "bestMatchingNode",
+          "start": 16,
+          "end": 29,
+          "calls": [
+            "matchingNodes",
+            "node.Status.Allocatable.Pods().Value",
+            "node.Status.Allocatable.Pods"
           ]
         }
       ],
@@ -206,6 +310,17 @@
             "apierrors.IsNotFound",
             "c.ensureReplicaSet"
           ]
+        },
+        {
+          "name": "c.ensureReplicaSet",
+          "start": 17,
+          "end": 29,
+          "calls": [
+            "c.replicaSetsFor",
+            "templatesMatch",
+            "c.syncReplicas",
+            "c.createReplicaSet"
+          ]
         }
       ]
     ]
@@ -213,8 +328,8 @@
   "30": {
     "year": 2010,
     "sources": [
-      "fn collect_bindings<'hir>(pattern: &'hir hir::Pat<'hir>) -> Vec<HirId> {\n    let mut bindings = Vec::new();\n\n    pattern.walk(|pat| {\n        if let hir::PatKind::Binding(_, id, _, _) = pat.kind {\n            bindings.push(id);\n        }\n        true\n    });\n\n    bindings.sort_unstable();\n    bindings.dedup();\n    bindings\n}",
-      "fn register_type<'tcx>(cx: &mut TypeContext<'tcx>, ty: Ty<'tcx>) -> TypeId {\n    if let Some(&id) = cx.ids.get(&ty) {\n        return id;\n    }\n    let id = TypeId::from_usize(cx.types.len());\n    cx.types.push(ty);\n    cx.ids.insert(ty, id);\n    id\n}\n\nfn find_type(cx: &TypeContext<'_>, id: TypeId) -> Option<Ty<'_>> {\n    cx.types.get(id.index()).copied()\n}"
+      "fn collect_bindings<'hir>(pattern: &'hir hir::Pat<'hir>) -> Vec<HirId> {\n    let mut bindings = Vec::new();\n\n    pattern.walk(|pat| {\n        if let hir::PatKind::Binding(_, id, _, _) = pat.kind {\n            bindings.push(id);\n        }\n        true\n    });\n\n    bindings.sort_unstable();\n    bindings.dedup();\n    bindings\n}\n\nfn common_bindings<'hir>(\n    left: &'hir hir::Pat<'hir>,\n    right: &'hir hir::Pat<'hir>,\n) -> Vec<HirId> {\n    let mut left_ids = collect_bindings(left);\n    let right_ids = collect_bindings(right);\n\n    if right_ids.is_empty() {\n        return Vec::new();\n    }\n\n    left_ids.retain(|id| right_ids.binary_search(id).is_ok());\n    left_ids\n}",
+      "fn register_type<'tcx>(cx: &mut TypeContext<'tcx>, ty: Ty<'tcx>) -> TypeId {\n    if let Some(&id) = cx.ids.get(&ty) {\n        return id;\n    }\n    let id = TypeId::from_usize(cx.types.len());\n    cx.types.push(ty);\n    cx.ids.insert(ty, id);\n    id\n}\n\nfn find_type(cx: &TypeContext<'_>, id: TypeId) -> Option<Ty<'_>> {\n    cx.types.get(id.index()).copied()\n}\n\nfn register_types<'tcx>(\n    cx: &mut TypeContext<'tcx>,\n    input: impl IntoIterator<Item = Ty<'tcx>>,\n) -> Vec<TypeId> {\n    let mut ids = Vec::new();\n    for ty in input {\n        let id = register_type(cx, ty);\n        if ids.last() != Some(&id) {\n            ids.push(id);\n        }\n    }\n    ids\n}\n\nfn contains_type(cx: &TypeContext<'_>, id: TypeId) -> bool {\n    find_type(cx, id).is_some()\n}"
     ],
     "functions": [
       [
@@ -227,6 +342,19 @@
             "bindings.push",
             "bindings.sort_unstable",
             "bindings.dedup"
+          ]
+        },
+        {
+          "name": "common_bindings",
+          "start": 16,
+          "end": 29,
+          "calls": [
+            "collect_bindings",
+            "right_ids.is_empty",
+            "Vec::new",
+            "left_ids.retain",
+            "right_ids.binary_search(id).is_ok",
+            "right_ids.binary_search"
           ]
         }
       ],
@@ -252,6 +380,27 @@
             "id.index",
             "copied"
           ]
+        },
+        {
+          "name": "register_types",
+          "start": 15,
+          "end": 27,
+          "calls": [
+            "Vec::new",
+            "register_type",
+            "ids.last",
+            "Some",
+            "ids.push"
+          ]
+        },
+        {
+          "name": "contains_type",
+          "start": 29,
+          "end": 31,
+          "calls": [
+            "find_type(cx, id).is_some",
+            "find_type"
+          ]
         }
       ]
     ]
@@ -259,8 +408,8 @@
   "43": {
     "year": 2018,
     "sources": [
-      "from inspect import signature\nfrom starlette.responses import JSONResponse\n\ndef build_endpoint(handler, response_model=None):\n    parameters = signature(handler).parameters\n    dependant = get_dependant(call=handler, path=\"/\")\n\n    async def endpoint(request):\n        solved = await solve_dependencies(\n            request=request,\n            dependant=dependant,\n            body=await request.json(),\n        )\n        if solved.errors:\n            raise RequestValidationError(solved.errors)\n        result = await handler(**solved.values)\n        data = serialize_response(response_model, result)\n        return JSONResponse(data)\n\n    return endpoint",
-      "def describe_operation(route, schema):\n    operation = {\n        \"summary\": route.summary or route.name.replace(\"_\", \" \"),\n        \"operationId\": route.unique_id,\n        \"responses\": {},\n    }\n\n    for status, model in route.response_models.items():\n        operation[\"responses\"][str(status)] = {\n            \"description\": \"Successful Response\",\n            \"content\": {\n                \"application/json\": {\"schema\": schema(model)},\n            },\n        }\n\n    return operation"
+      "from inspect import signature\nfrom starlette.responses import JSONResponse\n\ndef build_endpoint(handler, response_model=None):\n    parameters = signature(handler).parameters\n    dependant = get_dependant(call=handler, path=\"/\")\n\n    async def endpoint(request):\n        solved = await solve_dependencies(\n            request=request,\n            dependant=dependant,\n            body=await request.json(),\n        )\n        if solved.errors:\n            raise RequestValidationError(solved.errors)\n        result = await handler(**solved.values)\n        data = serialize_response(response_model, result)\n        return JSONResponse(data)\n\n    return endpoint\n\ndef serialize_response(response_model, result):\n    if response_model is None:\n        return jsonable_encoder(result)\n\n    adapter = TypeAdapter(response_model)\n    validated = adapter.validate_python(result, from_attributes=True)\n    return adapter.dump_python(\n        validated,\n        mode=\"json\",\n        by_alias=True,\n        exclude_unset=True,\n    )",
+      "def describe_operation(route, schema):\n    operation = {\n        \"summary\": route.summary or route.name.replace(\"_\", \" \"),\n        \"operationId\": route.unique_id,\n        \"responses\": {},\n    }\n\n    for status, model in route.response_models.items():\n        operation[\"responses\"][str(status)] = {\n            \"description\": \"Successful Response\",\n            \"content\": {\n                \"application/json\": {\"schema\": schema(model)},\n            },\n        }\n\n    return operation\n\ndef build_operations(routes, schema):\n    operations = {}\n    for route in routes:\n        if not route.include_in_schema:\n            continue\n\n        methods = operations.setdefault(route.path_format, {})\n        operation = describe_operation(route, schema)\n        for method in sorted(route.methods):\n            if method != \"HEAD\":\n                methods[method.lower()] = operation.copy()\n\n    return operations"
     ],
     "functions": [
       [
@@ -285,6 +434,17 @@
             "serialize_response",
             "JSONResponse"
           ]
+        },
+        {
+          "name": "serialize_response",
+          "start": 22,
+          "end": 33,
+          "calls": [
+            "jsonable_encoder",
+            "TypeAdapter",
+            "adapter.validate_python",
+            "adapter.dump_python"
+          ]
         }
       ],
       [
@@ -297,6 +457,18 @@
             "route.response_models.items",
             "schema"
           ]
+        },
+        {
+          "name": "build_operations",
+          "start": 18,
+          "end": 30,
+          "calls": [
+            "operations.setdefault",
+            "describe_operation",
+            "sorted",
+            "method.lower",
+            "operation.copy"
+          ]
         }
       ]
     ]
@@ -304,8 +476,8 @@
   "44": {
     "year": 2016,
     "sources": [
-      "import torch\nfrom torch import Tensor\n\ndef normalize_batch(values: Tensor, eps: float = 1e-5) -> Tensor:\n    if values.ndim < 2:\n        raise ValueError(\"Expected a batch with a channel dimension\")\n\n    reduce = (0, *range(2, values.ndim))\n    mean = values.mean(dim=reduce, keepdim=True)\n    variance = values.var(dim=reduce, keepdim=True, unbiased=False)\n    scale = torch.rsqrt(variance + eps)\n    return (values - mean) * scale\n\ndef loss(logits: Tensor, targets: Tensor) -> Tensor:\n    return torch.nn.functional.cross_entropy(logits, targets)",
-      "def backward_nodes(output, gradients):\n    if output.grad_fn is None:\n        return\n\n    pending = [(output.grad_fn, gradients)]\n    while pending:\n        node, upstream = pending.pop()\n        downstream = node.apply(*upstream)\n        for (edge, index), grad in zip(node.next_functions, downstream):\n            if edge is not None and grad is not None:\n                pending.append((edge, (grad,)))"
+      "import torch\nfrom torch import Tensor\n\ndef normalize_batch(values: Tensor, eps: float = 1e-5) -> Tensor:\n    if values.ndim < 2:\n        raise ValueError(\"Expected a batch with a channel dimension\")\n\n    reduce = (0, *range(2, values.ndim))\n    mean = values.mean(dim=reduce, keepdim=True)\n    variance = values.var(dim=reduce, keepdim=True, unbiased=False)\n    scale = torch.rsqrt(variance + eps)\n    return (values - mean) * scale\n\ndef loss(logits: Tensor, targets: Tensor) -> Tensor:\n    return torch.nn.functional.cross_entropy(logits, targets)\n\ndef batch_objective(values: Tensor, targets: Tensor, classifier) -> Tensor:\n    if values.size(0) != targets.size(0):\n        raise ValueError(\"Expected one target per sample\")\n\n    normalized = normalize_batch(values)\n    logits = classifier(normalized)\n    if logits.ndim != 2:\n        raise ValueError(\"Expected one score per class\")\n\n    return loss(logits, targets)",
+      "def backward_nodes(output, gradients):\n    if output.grad_fn is None:\n        return\n\n    pending = [(output.grad_fn, gradients)]\n    while pending:\n        node, upstream = pending.pop()\n        downstream = node.apply(*upstream)\n        for (edge, index), grad in zip(node.next_functions, downstream):\n            if edge is not None and grad is not None:\n                pending.append((edge, (grad,)))\n\ndef backward_from_loss(output, gradient=None):\n    if output.grad_fn is None:\n        return\n\n    if gradient is None:\n        if output.numel() != 1:\n            raise ValueError(\"Non-scalar outputs need an explicit gradient\")\n        gradient = output.new_ones(output.shape)\n\n    if gradient.shape != output.shape:\n        raise ValueError(\"Gradient must match the output shape\")\n\n    backward_nodes(output, (gradient,))"
     ],
     "functions": [
       [
@@ -327,6 +499,19 @@
           "calls": [
             "torch.nn.functional.cross_entropy"
           ]
+        },
+        {
+          "name": "batch_objective",
+          "start": 17,
+          "end": 26,
+          "calls": [
+            "values.size",
+            "targets.size",
+            "ValueError",
+            "normalize_batch",
+            "classifier",
+            "loss"
+          ]
         }
       ],
       [
@@ -339,6 +524,17 @@
             "node.apply",
             "pending.append"
           ]
+        },
+        {
+          "name": "backward_from_loss",
+          "start": 13,
+          "end": 25,
+          "calls": [
+            "output.numel",
+            "ValueError",
+            "output.new_ones",
+            "backward_nodes"
+          ]
         }
       ]
     ]
@@ -346,8 +542,8 @@
   "48": {
     "year": 2010,
     "sources": [
-      "def align_rows(left, right, fill_value=None):\n    index = left.index.union(right.index, sort=False)\n    left_indexer = left.index.get_indexer(index)\n    right_indexer = right.index.get_indexer(index)\n\n    left_values = take_with_fill(left, left_indexer, fill_value)\n    right_values = take_with_fill(right, right_indexer, fill_value)\n    return left_values, right_values, index\n\ndef group_values(frame, key):\n    codes, uniques = factorize(frame[key], sort=False)\n    for code, label in enumerate(uniques):\n        yield label, frame.iloc[codes == code]",
-      "def rolling_mean(values, window):\n    if window <= 0:\n        raise ValueError(\"window must be positive\")\n\n    series = Series(values, copy=False)\n    valid = series.notna()\n    counts = valid.cumsum()\n    totals = series.fillna(0).cumsum()\n\n    sums = totals - totals.shift(window, fill_value=0)\n    counts = counts - counts.shift(window, fill_value=0)\n    return sums.div(counts.where(counts > 0))"
+      "def align_rows(left, right, fill_value=None):\n    index = left.index.union(right.index, sort=False)\n    left_indexer = left.index.get_indexer(index)\n    right_indexer = right.index.get_indexer(index)\n\n    left_values = take_with_fill(left, left_indexer, fill_value)\n    right_values = take_with_fill(right, right_indexer, fill_value)\n    return left_values, right_values, index\n\ndef group_values(frame, key):\n    codes, uniques = factorize(frame[key], sort=False)\n    for code, label in enumerate(uniques):\n        yield label, frame.iloc[codes == code]\n\ndef take_with_fill(frame, indexer, fill_value):\n    if len(frame) == 0:\n        return np.full((len(indexer), len(frame.columns)), fill_value)\n\n    missing = indexer < 0\n    safe_indexer = np.where(missing, 0, indexer)\n    values = frame.to_numpy().take(safe_indexer, axis=0)\n    if missing.any():\n        values = np.where(missing[:, None], fill_value, values)\n\n    return values\n\n\ndef join_groups(frame, key):\n    return {label: group for label, group in group_values(frame, key)}",
+      "def rolling_mean(values, window):\n    if window <= 0:\n        raise ValueError(\"window must be positive\")\n\n    series = Series(values, copy=False)\n    valid = series.notna()\n    counts = valid.cumsum()\n    totals = series.fillna(0).cumsum()\n\n    sums = totals - totals.shift(window, fill_value=0)\n    counts = counts - counts.shift(window, fill_value=0)\n    return sums.div(counts.where(counts > 0))\n\ndef rolling_center(values, window):\n    series = Series(values, copy=False)\n    if series.empty:\n        return series\n\n    baseline = rolling_mean(series, window)\n    centered = series.sub(baseline)\n    observed = series.notna() & baseline.notna()\n    return centered.where(observed)\n\n\ndef rolling_spread(values, window):\n    deviations = rolling_center(values, window)\n    return rolling_mean(deviations.pow(2), window).pow(0.5)"
     ],
     "functions": [
       [
@@ -369,6 +565,27 @@
           "calls": [
             "factorize"
           ]
+        },
+        {
+          "name": "take_with_fill",
+          "start": 15,
+          "end": 25,
+          "calls": [
+            "len",
+            "np.full",
+            "np.where",
+            "frame.to_numpy().take",
+            "frame.to_numpy",
+            "missing.any"
+          ]
+        },
+        {
+          "name": "join_groups",
+          "start": 28,
+          "end": 29,
+          "calls": [
+            "group_values"
+          ]
         }
       ],
       [
@@ -388,6 +605,30 @@
             "sums.div",
             "counts.where"
           ]
+        },
+        {
+          "name": "rolling_center",
+          "start": 14,
+          "end": 22,
+          "calls": [
+            "Series",
+            "rolling_mean",
+            "series.sub",
+            "series.notna",
+            "baseline.notna",
+            "centered.where"
+          ]
+        },
+        {
+          "name": "rolling_spread",
+          "start": 25,
+          "end": 27,
+          "calls": [
+            "rolling_center",
+            "rolling_mean(deviations.pow(2), window).pow",
+            "rolling_mean",
+            "deviations.pow"
+          ]
         }
       ]
     ]
@@ -395,8 +636,8 @@
   "52": {
     "year": 2013,
     "sources": [
-      "const idlePriority = 5;\n\nfunction scheduleCallback(root, callback, priority) {\n  const expiration = priority === idlePriority ? Infinity : now() + 250;\n  const task = {root, callback, expiration};\n  taskQueue.push(task);\n  requestHostCallback(flushWork);\n  return task;\n}\n\nfunction flushWork(deadline) {\n  while (taskQueue.length && deadline.timeRemaining() > 0) {\n    const task = taskQueue.shift();\n    const continuation = task.callback();\n    if (typeof continuation === 'function') {\n      task.callback = continuation;\n      taskQueue.unshift(task);\n      break;\n    }\n  }\n}",
-      "function reconcileChildren(current, workInProgress, nextChildren, lanes) {\n  if (current === null) {\n    workInProgress.child = mountChildFibers(workInProgress, null, nextChildren, lanes);\n    return;\n  }\n\n  const previousChildren = current.child;\n  workInProgress.child = reconcileChildFibers(\n    workInProgress,\n    previousChildren,\n    nextChildren,\n    lanes,\n  );\n}"
+      "const idlePriority = 5;\n\nfunction scheduleCallback(root, callback, priority) {\n  const expiration = priority === idlePriority ? Infinity : now() + 250;\n  const task = {root, callback, expiration};\n  taskQueue.push(task);\n  requestHostCallback(flushWork);\n  return task;\n}\n\nfunction flushWork(deadline) {\n  while (taskQueue.length && deadline.timeRemaining() > 0) {\n    const task = taskQueue.shift();\n    const continuation = task.callback();\n    if (typeof continuation === 'function') {\n      task.callback = continuation;\n      taskQueue.unshift(task);\n      break;\n    }\n  }\n}\n\nfunction requestHostCallback(callback) {\n  if (hostCallbackPending) {\n    return;\n  }\n\n  hostCallbackPending = true;\n  channel.port1.onmessage = () => {\n    hostCallbackPending = false;\n    const end = now() + frameLength;\n    callback({timeRemaining: () => Math.max(0, end - now())});\n    if (taskQueue.length > 0) {\n      requestHostCallback(callback);\n    }\n  };\n  channel.port2.postMessage(null);\n}\n\nfunction scheduleIdleWork(root, callback) {\n  return scheduleCallback(root, callback, idlePriority);\n}",
+      "function reconcileChildren(current, workInProgress, nextChildren, lanes) {\n  if (current === null) {\n    workInProgress.child = mountChildFibers(workInProgress, null, nextChildren, lanes);\n    return;\n  }\n\n  const previousChildren = current.child;\n  workInProgress.child = reconcileChildFibers(\n    workInProgress,\n    previousChildren,\n    nextChildren,\n    lanes,\n  );\n}\n\nfunction updateChildren(fiber, children, lanes) {\n  const current = fiber.alternate;\n  if (current !== null && current.memoizedProps.children === children) {\n    fiber.child = current.child;\n    return;\n  }\n\n  reconcileChildren(current, fiber, children, lanes);\n  if (fiber.child !== null) {\n    fiber.child.return = fiber;\n  }\n}"
     ],
     "functions": [
       [
@@ -420,6 +661,31 @@
             "task.callback",
             "taskQueue.unshift"
           ]
+        },
+        {
+          "name": "requestHostCallback",
+          "start": 23,
+          "end": 38,
+          "calls": [
+            "channel.port2.postMessage"
+          ]
+        },
+        {
+          "name": "timeRemaining",
+          "start": 32,
+          "end": 32,
+          "calls": [
+            "Math.max",
+            "now"
+          ]
+        },
+        {
+          "name": "scheduleIdleWork",
+          "start": 40,
+          "end": 42,
+          "calls": [
+            "scheduleCallback"
+          ]
         }
       ],
       [
@@ -431,6 +697,14 @@
             "mountChildFibers",
             "reconcileChildFibers"
           ]
+        },
+        {
+          "name": "updateChildren",
+          "start": 16,
+          "end": 27,
+          "calls": [
+            "reconcileChildren"
+          ]
         }
       ]
     ]
@@ -438,8 +712,8 @@
   "53": {
     "year": 2015,
     "sources": [
-      "interface Edit {\n  start: number;\n  end: number;\n  text: string;\n}\n\nfunction applyEdits(buffer: TextBuffer, edits: readonly Edit[]): void {\n  const ordered = [...edits].sort((a, b) => b.start - a.start);\n  for (const edit of ordered) {\n    const removed = edit.end - edit.start;\n    buffer.delete(edit.start, removed);\n    if (edit.text.length > 0) {\n      buffer.insert(edit.start, edit.text);\n    }\n  }\n}",
-      "function resolveCommands(registry: CommandRegistry, prefix: string): QuickPickItem[] {\n  const normalized = prefix.trim().toLowerCase();\n  const result: QuickPickItem[] = [];\n\n  for (const command of registry.getCommands()) {\n    const label = command.title ?? command.id;\n    if (!label.toLowerCase().includes(normalized)) {\n      continue;\n    }\n    result.push({ label, description: command.id });\n  }\n\n  return result;\n}"
+      "interface Edit {\n  start: number;\n  end: number;\n  text: string;\n}\n\nfunction applyEdits(buffer: TextBuffer, edits: readonly Edit[]): void {\n  const ordered = [...edits].sort((a, b) => b.start - a.start);\n  for (const edit of ordered) {\n    const removed = edit.end - edit.start;\n    buffer.delete(edit.start, removed);\n    if (edit.text.length > 0) {\n      buffer.insert(edit.start, edit.text);\n    }\n  }\n}\n\nfunction applyTransaction(buffer: TextBuffer, edits: readonly Edit[]): void {\n  const ascending = [...edits].sort((a, b) => a.start - b.start);\n  let previousEnd = 0;\n  for (const edit of ascending) {\n    if (edit.start < previousEnd || edit.end < edit.start) {\n      throw new RangeError(\"Overlapping or invalid edits\");\n    }\n    previousEnd = edit.end;\n  }\n\n  buffer.beginEdit();\n  try {\n    applyEdits(buffer, ascending);\n  } finally {\n    buffer.endEdit();\n  }\n}",
+      "function resolveCommands(registry: CommandRegistry, prefix: string): QuickPickItem[] {\n  const normalized = prefix.trim().toLowerCase();\n  const result: QuickPickItem[] = [];\n\n  for (const command of registry.getCommands()) {\n    const label = command.title ?? command.id;\n    if (!label.toLowerCase().includes(normalized)) {\n      continue;\n    }\n    result.push({ label, description: command.id });\n  }\n\n  return result;\n}\n\nfunction showCommandPicker(registry: CommandRegistry, picker: QuickPick): Disposable {\n  const refresh = (value: string): void => {\n    const items = resolveCommands(registry, value);\n    picker.items = items.slice(0, 50);\n  };\n\n  const subscription = picker.onDidChangeValue(refresh);\n  refresh(picker.value);\n  picker.show();\n  return subscription;\n}"
     ],
     "functions": [
       [
@@ -451,6 +725,17 @@
             "edits.sort",
             "buffer.delete",
             "buffer.insert"
+          ]
+        },
+        {
+          "name": "applyTransaction",
+          "start": 18,
+          "end": 34,
+          "calls": [
+            "[...edits].sort",
+            "buffer.beginEdit",
+            "applyEdits",
+            "buffer.endEdit"
           ]
         }
       ],
@@ -466,6 +751,25 @@
             "includes",
             "result.push"
           ]
+        },
+        {
+          "name": "showCommandPicker",
+          "start": 16,
+          "end": 26,
+          "calls": [
+            "picker.onDidChangeValue",
+            "refresh",
+            "picker.show"
+          ]
+        },
+        {
+          "name": "refresh",
+          "start": 17,
+          "end": 20,
+          "calls": [
+            "resolveCommands",
+            "items.slice"
+          ]
         }
       ]
     ]
@@ -473,8 +777,8 @@
   "91": {
     "year": 2015,
     "sources": [
-      "class StatusBadge extends StatelessWidget {\n  const StatusBadge({super.key, required this.label});\n\n  final String label;\n\n  @override\n  Widget build(BuildContext context) {\n    final colors = Theme.of(context).colorScheme;\n    return DecoratedBox(\n      decoration: BoxDecoration(\n        color: colors.secondaryContainer,\n        borderRadius: BorderRadius.circular(12),\n      ),\n      child: Padding(\n        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),\n        child: Text(label),\n      ),\n    );\n  }\n}",
-      "class _SelectionState extends State<SelectionList> {\n  int _selected = 0;\n\n  @override\n  Widget build(BuildContext context) {\n    return ListView.builder(\n      itemCount: widget.items.length,\n      itemBuilder: (context, index) {\n        return ListTile(\n          title: Text(widget.items[index]),\n          selected: index == _selected,\n          onTap: () => setState(() => _selected = index),\n        );\n      },\n    );\n  }\n}"
+      "class StatusBadge extends StatelessWidget {\n  const StatusBadge({super.key, required this.label});\n\n  final String label;\n\n  @override\n  Widget build(BuildContext context) {\n    final colors = Theme.of(context).colorScheme;\n    return DecoratedBox(\n      decoration: BoxDecoration(\n        color: colors.secondaryContainer,\n        borderRadius: BorderRadius.circular(12),\n      ),\n      child: Padding(\n        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),\n        child: buildBadgeLabel(label),\n      ),\n    );\n  }\n}\n\nWidget buildStatusSummary(String label, int count) {\n  if (count <= 0) {\n    return const SizedBox.shrink();\n  }\n\n  final summary = count == 1 ? label : '$label ($count)';\n  return Align(\n    alignment: Alignment.centerLeft,\n    child: Semantics(\n      label: summary,\n      child: StatusBadge(label: summary),\n    ),\n  );\n}\n\nText buildBadgeLabel(String label) {\n  return Text(\n    label,\n    maxLines: 1,\n    overflow: TextOverflow.ellipsis,\n  );\n}",
+      "class _SelectionState extends State<SelectionList> {\n  int _selected = 0;\n\n  @override\n  Widget build(BuildContext context) {\n    return ListView.builder(\n      itemCount: widget.items.length,\n      itemBuilder: (context, index) {\n        return ListTile(\n          title: buildSelectionLabel(widget.items[index], index == _selected),\n          selected: index == _selected,\n          onTap: () => setState(() => _selected = index),\n        );\n      },\n    );\n  }\n}\n\nWidget buildSelectionPanel(List<String> labels, String title) {\n  if (labels.isEmpty) {\n    return Center(child: Text(title));\n  }\n\n  return Column(\n    crossAxisAlignment: CrossAxisAlignment.start,\n    children: [\n      Text(title),\n      Expanded(child: SelectionList(items: labels)),\n    ],\n  );\n}\n\nText buildSelectionLabel(String label, bool selected) {\n  return Text(\n    label,\n    maxLines: 1,\n    overflow: TextOverflow.ellipsis,\n    style: selected ? const TextStyle(fontWeight: FontWeight.bold) : null,\n  );\n}"
     ],
     "functions": [
       [
@@ -489,6 +793,25 @@
             "BorderRadius.circular",
             "Padding",
             "EdgeInsets.symmetric",
+            "buildBadgeLabel"
+          ]
+        },
+        {
+          "name": "buildStatusSummary",
+          "start": 22,
+          "end": 35,
+          "calls": [
+            "SizedBox.shrink",
+            "Align",
+            "Semantics",
+            "StatusBadge"
+          ]
+        },
+        {
+          "name": "buildBadgeLabel",
+          "start": 37,
+          "end": 43,
+          "calls": [
             "Text"
           ]
         }
@@ -501,8 +824,29 @@
           "calls": [
             "ListView.builder",
             "ListTile",
-            "Text",
+            "buildSelectionLabel",
             "setState"
+          ]
+        },
+        {
+          "name": "buildSelectionPanel",
+          "start": 19,
+          "end": 31,
+          "calls": [
+            "Center",
+            "Text",
+            "Column",
+            "Expanded",
+            "SelectionList"
+          ]
+        },
+        {
+          "name": "buildSelectionLabel",
+          "start": 33,
+          "end": 40,
+          "calls": [
+            "Text",
+            "TextStyle"
           ]
         }
       ]

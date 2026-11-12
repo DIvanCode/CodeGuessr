@@ -112,11 +112,11 @@ async def world_snapshot(
         raise HTTPException(
             409, "Репозитории с подходящим кодом закончились. Начните новую игру."
         )
-    repo, sources = challenge
+    repo, sources, graph_sources = challenge
     country = next(
         item for item in world.atlas["repositories"] if item["id"] == repo["id"]
     )
-    return make_snapshot(repo, country, repo["year"], sources), world.atlas[
+    return make_snapshot(repo, country, repo["year"], sources, graph_sources=graph_sources), world.atlas[
         "repositories"
     ]
 
@@ -152,7 +152,10 @@ async def hint(round_id: UUID, payload: HintRequest, request: Request) -> dict:
     if round_.result is not None:
         raise HTTPException(409, "Раунд уже завершён.")
     if payload.kind == "context" and not (
-        any(file["start"] > file["context_start"] for file in round_.snapshot["files"])
+        any(
+            file["start"] > file["context_start"]
+            for file in round_.snapshot["files"][:round_.snapshot["clue_file_count"]]
+        )
         or any(
             node["start"] > 1
             for node in round_.snapshot["call_graph"]["nodes"].values()

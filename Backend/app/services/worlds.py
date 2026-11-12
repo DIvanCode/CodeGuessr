@@ -1,4 +1,5 @@
 import random
+from asyncio import gather
 from collections import Counter
 from dataclasses import dataclass, field
 from math import floor
@@ -7,6 +8,7 @@ from uuid import UUID
 
 from app.services.atlas import atlas, build_atlas
 from app.services.catalog import catalog
+from app.services.function_analysis import LANGUAGES
 from app.services.github import GitHubClient
 from app.services.rounds import CONTEXT_LENGTH, SNIPPET_LENGTH, SourceFile
 
@@ -14,6 +16,8 @@ MAX_REPOSITORIES = 60
 ROUND_ATTEMPTS = 4
 OTHER_REGION = "Другое"
 FILES_PER_ROUND = 2
+EXTRA_GRAPH_FILES = 6
+MAX_GRAPH_FILE_BYTES = 64_000
 MIN_FILE_BYTES = 300
 MAX_FILE_BYTES = 200_000
 MIN_CODE_LINES = 12
@@ -97,12 +101,12 @@ def language_shares(sizes: dict[str, int]) -> dict[str, int]:
     return {name: share for name, share in ordered if share > 0}
 
 
-def is_code_file(item: dict) -> bool:
+def is_code_file(item: dict, min_bytes: int = MIN_FILE_BYTES) -> bool:
     path = PurePosixPath(item["path"])
     directories = {part.casefold() for part in path.parts[:-1]}
     return (
         path.suffix.casefold() in CODE_EXTENSIONS
-        and MIN_FILE_BYTES <= item.get("size", 0) <= MAX_FILE_BYTES
+        and min_bytes <= item.get("size", 0) <= MAX_FILE_BYTES
         and not directories & SKIPPED_DIRECTORIES
         and ".min." not in path.name
     )
@@ -116,14 +120,19 @@ def snippet_start(lines: list[str], rng: random.Random) -> int:
     return rng.choice(starts) if starts else CONTEXT_LENGTH
 
 
-async def pick_sources(github: GitHubClient, repo: dict, rng: random.Random) -> list[SourceFile]:
-    candidates = [item for item in await github.tree(repo["full_name"], repo["branch"]) if is_code_file(item)]
+async def pick_sources(
+    github: GitHubClient, repo: dict, rng: random.Random,
+) -> tuple[list[SourceFile], list[SourceFile]]:
+    tree = await github.tree(repo["full_name"], repo["branch"])
+    candidates = [item for item in tree if is_code_file(item)]
     rng.shuffle(candidates)
     sources, directories = [], set()
+    attempted = set()
     for item in candidates[:12]:
         directory = str(PurePosixPath(item["path"]).parent)
         if directory in directories and len(candidates) > FILES_PER_ROUND:
             continue
+        attempted.add(item["path"])
         text = await github.file(repo["full_name"], repo["branch"], item["path"])
         if text is None or "\x00" in text:
             continue
@@ -134,10 +143,36 @@ async def pick_sources(github: GitHubClient, repo: dict, rng: random.Random) -> 
         directories.add(directory)
         if len(sources) == FILES_PER_ROUND:
             break
-    return sources
+    if not sources:
+        return [], []
+
+    languages = {LANGUAGES.get(PurePosixPath(source.path).suffix.casefold()) for source in sources}
+    extra = [
+        PurePosixPath(item["path"])
+        for item in tree
+        if item["path"] not in attempted
+        and is_code_file(item, min_bytes=1)
+        and item["size"] <= MAX_GRAPH_FILE_BYTES
+        and PurePosixPath(item["path"]).suffix.casefold() in LANGUAGES
+    ]
+    extra.sort(key=lambda path: (
+        LANGUAGES[path.suffix.casefold()] not in languages,
+        str(path.parent) not in directories,
+        str(path),
+    ))
+    paths = [str(path) for path in extra[:EXTRA_GRAPH_FILES]]
+    texts = await gather(*(github.file(repo["full_name"], repo["branch"], path) for path in paths))
+    graph_sources = [
+        SourceFile(path=path, text=text, start=0)
+        for path, text in zip(paths, texts, strict=True)
+        if text and "\x00" not in text and len(text.encode()) <= MAX_GRAPH_FILE_BYTES
+    ]
+    return sources, graph_sources
 
 
-async def world_challenge(github: GitHubClient, world: World, exclude: list[int]) -> tuple[dict, list[SourceFile]] | None:
+async def world_challenge(
+    github: GitHubClient, world: World, exclude: list[int],
+) -> tuple[dict, list[SourceFile], list[SourceFile]] | None:
     rng = random.Random()
     candidates = [
         repo for repo in world.catalog["repositories"]
@@ -145,11 +180,11 @@ async def world_challenge(github: GitHubClient, world: World, exclude: list[int]
     ]
     rng.shuffle(candidates)
     for repo in candidates[:ROUND_ATTEMPTS]:
-        sources = await pick_sources(github, repo, rng)
+        sources, graph_sources = await pick_sources(github, repo, rng)
         if not sources:
             world.skipped.add(repo["id"])
             continue
         if not repo["languages"]:
             repo["languages"] = language_shares(await github.languages(repo["full_name"]))
-        return repo, sources
+        return repo, sources, graph_sources
     return None
