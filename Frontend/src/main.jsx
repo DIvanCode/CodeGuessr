@@ -452,19 +452,15 @@ function App() {
                 <Editor key={round.id} round={round} file={file} onFile={selectFile} />
               )}
               {error && <p className="error" role="status">{error}</p>}
-              {round.result ? <Result result={round.result} data={data} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
-                <>
-                  <div className="hints">
-                    {hints.map(([kind, label]) => (
-                      <button key={kind} type="button" onClick={() => act("hint", { kind })}
-                        disabled={pending || round.hints[kind] || (kind === "context" && !(hasGraph ? hasContext : file.has_context))}>
-                        {label} <span>{round.hints[kind] ? "✓" : `−${round.hint_costs[kind]}`}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <GuessForm draft={game.draft} languageOptions={data.language_options} starBands={round.star_bands}
-                    onDraft={draft} onSubmit={submit} pending={pending} />
-                </>
+              {!round.result && (
+                <div className="hints">
+                  {hints.map(([kind, label]) => (
+                    <button key={kind} type="button" onClick={() => act("hint", { kind })}
+                      disabled={pending || round.hints[kind] || (kind === "context" && !(hasGraph ? hasContext : file.has_context))}>
+                      {label} <span>{round.hints[kind] ? "✓" : `−${round.hint_costs[kind]}`}</span>
+                    </button>
+                  ))}
+                </div>
               )}
             </>
           )}
@@ -473,6 +469,12 @@ function App() {
           folders={folders} onNeedFolders={needFolders} enabled={Boolean(round && !round.result && !pending)}
           ownerMap={Boolean(game.world)} choice={game.draft.choice} pin={game.draft.pin} result={round?.result} hint={round?.region}
           onChoose={draft} />
+        <section className="answer" aria-label="Ответ">
+          {round && (round.result
+            ? <Result result={round.result} data={data} draft={game.draft} finished={finished >= total} score={score} onNext={next} />
+            : <GuessForm draft={game.draft} languageOptions={data.language_options} starBands={round.star_bands}
+              onDraft={draft} onSubmit={submit} pending={pending} />)}
+        </section>
       </main>
     </>
   );
