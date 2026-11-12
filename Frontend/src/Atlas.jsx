@@ -10,6 +10,12 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const polygonPoints = polygon => polygon.map(point => point.join(",")).join(" ");
 const shades = ["#f9f0dd 13%", "#0e252d 14%", "#f9f0dd 29%", "#0e252d 5%", "#0e252d 26%"];
 const LEVEL_TITLES = { region: "Материки", group: "Группы", repository: "Репозитории", folder: "Папки" };
+const SIMILAR_PROJECTS = "похожие проекты по описанию и topics";
+const AXES = {
+  demo: { label: "Шесть тематических материков", region: "тематика проекта", group: "семейство языков" },
+  topic: { label: "Материки из похожих по описанию проектов", region: SIMILAR_PROJECTS, group: "основной язык" },
+  language: { label: "Материки по основному языку проектов", region: "основной язык", group: SIMILAR_PROJECTS },
+};
 const shadeOf = index => shades[(index * 13 + Math.floor(index / 5)) % shades.length];
 
 export const LEVELS = {
@@ -135,6 +141,7 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
   const drag = useRef(null);
   const touches = useRef(new Map());
   const pinch = useRef(null);
+  const axes = AXES[ownerMap ? data.region_axis ?? "topic" : "demo"];
   const levels = LEVELS[difficulty] ?? LEVELS.easy;
   const steps = thresholds(data, levels);
   const maxZoom = Math.max(5, steps.at(-1) * 3);
@@ -365,7 +372,7 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
         <svg
           ref={svg} id="map" className={dragging ? "dragging" : ""} role="img"
           viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
-          aria-label={`${ownerMap ? "Материки из похожих по описанию проектов" : "Шесть тематических материков"}. Каждая страна — один репозиторий.`}
+          aria-label={`${axes.label}. Каждая страна — один репозиторий.`}
           onPointerDown={pointerDown} onPointerMove={pointerMove}
           onPointerUp={pointerUp} onPointerCancel={endDrag} onPointerLeave={() => setTooltip(null)}
         >
@@ -454,8 +461,8 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
         </div>
       </div>
       <footer className="legend">
-        <span><b>Материк</b> — {ownerMap ? "похожие проекты по описанию и topics" : "тематика проекта"}</span>
-        {levels.includes("group") && <span><b>Группа</b> — {ownerMap ? "основной язык" : "семейство языков"}</span>}
+        <span><b>Материк</b> — {axes.region}</span>
+        {levels.includes("group") && <span><b>Группа</b> — {axes.group}</span>}
         <span><b>Страна</b> — репозиторий</span>
         {levels.includes("folder") && <span><b>Город</b> — папка внутри репозитория</span>}
         <span><b className="only-mouse">Колесо</b><b className="only-touch">Щипок</b> приближает: глубже видны {levels.length > 2 ? "новые границы" : "названия"}</span>

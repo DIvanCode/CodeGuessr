@@ -76,33 +76,86 @@ def test_language_shares_sum_to_one_hundred() -> None:
     assert language_shares({}) == {}
 
 
-def test_world_groups_owner_repositories_into_topics() -> None:
-    github = FakeGitHub([
-        remote_repo("weather-bot", "Python", 500, topics=["telegram", "bot"]),
-        remote_repo("notes-bot", "Go", 30, topics=["telegram", "bot"]),
-        remote_repo("music-bot", None, 3, description="Discord bot for music"),
-        remote_repo("snake", "Python", 20, topics=["game"]),
-        remote_repo("tetris", "Go", 10, description="Tetris game in the terminal"),
-        remote_repo("chess", "Rust", 5, topics=["game", "chess"]),
+def bots_and_games(languages: tuple[str | None, ...] = ("Python", "Go", None, "Python", "Go", "Rust")) -> list[dict]:
+    weather, notes, music, snake, tetris, chess = languages
+    return [
+        remote_repo("weather-bot", weather, 500, topics=["telegram", "bot"]),
+        remote_repo("notes-bot", notes, 30, topics=["telegram", "bot"]),
+        remote_repo("music-bot", music, 3, description="Discord bot for music"),
+        remote_repo("snake", snake, 20, topics=["game"]),
+        remote_repo("tetris", tetris, 10, description="Tetris game in the terminal"),
+        remote_repo("chess", chess, 5, topics=["game", "chess"]),
         remote_repo("forked", "Rust", 900, fork=True, topics=["game"]),
         remote_repo("empty", "Python", 1, size=0, topics=["bot"]),
-    ])
-    with TestClient(create_app(github)) as client:
+    ]
+
+
+def three_topics() -> list[dict]:
+    return bots_and_games()[:6] + [
+        remote_repo("json-parser", "Rust", 40, topics=["parser", "json"]),
+        remote_repo("yaml-parser", "Go", 8, topics=["parser", "yaml"]),
+        remote_repo("toml-parser", "Python", 2, description="TOML parser with good errors"),
+    ]
+
+
+def region_members(world: dict) -> dict[str, list[str]]:
+    regions = {region["id"]: region["name"] for region in world["regions"]}
+    return {
+        regions[region]: sorted(repo["name"] for repo in world["repositories"] if repo["region"] == region)
+        for region in regions
+    }
+
+
+def test_world_groups_owner_repositories_into_topics() -> None:
+    with TestClient(create_app(FakeGitHub(three_topics()))) as client:
         response = client.post("/api/worlds", json={"url": "https://github.com/acme"})
         assert response.status_code == 201
         world = response.json()
         assert world["owner"] == "acme"
-        regions = {region["id"]: region["name"] for region in world["regions"]}
-        members = {
-            regions[region]: sorted(repo["name"] for repo in world["repositories"] if repo["region"] == region)
-            for region in regions
-        }
-        assert members == {
+        assert world["region_axis"] == "topic"
+        assert region_members(world) == {
             "bot · telegram": ["acme/music-bot", "acme/notes-bot", "acme/weather-bot"],
             "game": ["acme/chess", "acme/snake", "acme/tetris"],
+            "parser": ["acme/json-parser", "acme/toml-parser", "acme/yaml-parser"],
         }
         assert {"Python", "Go", "Rust"}.issubset(world["language_options"])
         assert client.get(f"/api/worlds/{world['id']}").json() == world
+
+
+def test_few_topics_fall_back_to_language_regions_with_topic_groups() -> None:
+    with TestClient(create_app(FakeGitHub(bots_and_games()))) as client:
+        world = client.post("/api/worlds", json={"url": "acme", "difficulty": "medium"}).json()
+    assert world["region_axis"] == "language"
+    assert region_members(world) == {
+        "Go": ["acme/notes-bot", "acme/tetris"],
+        "Python": ["acme/snake", "acme/weather-bot"],
+        "Rust": ["acme/chess"],
+        "Другие языки": ["acme/music-bot"],
+    }
+    groups = {group["id"]: group["name"] for group in world["groups"]}
+    assert {repo["name"]: groups[repo["group"]] for repo in world["repositories"]} == {
+        "acme/weather-bot": "bot · telegram", "acme/notes-bot": "bot · telegram", "acme/music-bot": "bot · telegram",
+        "acme/snake": "game", "acme/tetris": "game", "acme/chess": "game",
+    }
+
+
+def test_few_topics_stay_when_languages_do_not_split_better() -> None:
+    languages = ("Python", "Python", None, "Python", "Python", "Python")
+    with TestClient(create_app(FakeGitHub(bots_and_games(languages)))) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+    assert world["region_axis"] == "topic"
+    assert set(region_members(world)) == {"bot · telegram", "game"}
+
+
+def test_language_regions_merge_rare_languages_beyond_outlines() -> None:
+    languages = ["Python", "Python", "Go", "Rust", "Ruby", "Java", "C", "Zig", None]
+    repositories = [remote_repo(f"tool-{index}", language, 10 - index) for index, language in enumerate(languages)]
+    with TestClient(create_app(FakeGitHub(repositories))) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+    assert world["region_axis"] == "language"
+    members = region_members(world)
+    assert list(members) == ["Python", "C", "Go", "Java", "Ruby", "Другие языки"]
+    assert members["Другие языки"] == ["acme/tool-3", "acme/tool-7", "acme/tool-8"]
 
 
 def test_world_round_uses_repository_sources() -> None:
@@ -285,12 +338,11 @@ def hard_world_github() -> FakeGitHub:
 
 
 def test_medium_world_groups_repositories_by_primary_language() -> None:
-    github = hard_world_github()
-    github.remote[1]["language"] = "Go"
-    with TestClient(create_app(github)) as client:
+    with TestClient(create_app(FakeGitHub(three_topics()))) as client:
         world = client.post("/api/worlds", json={"url": "acme", "difficulty": "medium"}).json()
     assert world["difficulty"] == "medium"
-    assert {group["name"] for group in world["groups"]} == {"Python", "Go"}
+    assert world["region_axis"] == "topic"
+    assert {group["name"] for group in world["groups"]} == {"Python", "Go", "Rust", "Другие языки"}
     assert all(repo["group"] for repo in world["repositories"])
 
 

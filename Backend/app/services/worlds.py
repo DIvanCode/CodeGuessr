@@ -19,6 +19,7 @@ ROUND_ATTEMPTS = 4
 EXTRA_GRAPH_FILES = 6
 MAX_GRAPH_FILE_BYTES = 64_000
 MISC_TOPIC = "Разное"
+MIN_TOPIC_REGIONS = 3
 OTHER_LANGUAGES = "Другие языки"
 MAX_LANGUAGE_GROUPS = 5
 OTHER_FOLDERS = "…"
@@ -79,13 +80,26 @@ def language_groups(repos: list[dict], regions: list[dict]) -> None:
             repo["group"] = repo["language"] if repo["language"] in kept else OTHER_LANGUAGES
 
 
+def language_clusters(repositories: list[dict], limit: int) -> tuple[list[int], list[str]]:
+    languages = [repo.get("language") or OTHER_LANGUAGES for repo in repositories]
+    counts = Counter(languages)
+    names = sorted(counts, key=lambda language: (language == OTHER_LANGUAGES, -counts[language], language.casefold()))
+    if len(names) > limit:
+        names = [language for language in names if language != OTHER_LANGUAGES][:limit - 1] + [OTHER_LANGUAGES]
+    other = names.index(OTHER_LANGUAGES) if OTHER_LANGUAGES in names else None
+    return [names.index(language) if language in names else other for language in languages], names
+
+
 def owner_catalog(repositories: list[dict], difficulty: Difficulty) -> dict:
     eligible = [repo for repo in repositories if not repo.get("fork") and repo.get("size", 0) > 0]
     eligible.sort(key=lambda repo: (-repo.get("stargazers_count", 0), repo["full_name"].casefold()))
     eligible = eligible[:difficulty.max_repositories]
 
     outlines = catalog()["regions"]
-    labels, names = cluster_repositories(eligible, len(outlines), MISC_TOPIC)
+    topic_labels, topic_names = cluster_repositories(eligible, len(outlines), MISC_TOPIC)
+    language_labels, language_names = language_clusters(eligible, len(outlines))
+    by_language = len(topic_names) < MIN_TOPIC_REGIONS and len(language_names) > len(topic_names)
+    labels, names = (language_labels, language_names) if by_language else (topic_labels, topic_names)
     regions = [
         {**{key: outline[key] for key in ("color", "outline")}, "id": f"region-{index}", "name": name}
         for index, (outline, name) in enumerate(zip(outlines, names))
@@ -107,9 +121,12 @@ def owner_catalog(repositories: list[dict], difficulty: Difficulty) -> dict:
             "year": int(repo["created_at"][:4]),
             "languages": {},
         })
-    if difficulty.grouped:
+    if difficulty.grouped and by_language:
+        for repo, label in zip(repos, topic_labels):
+            repo["group"] = topic_names[label]
+    elif difficulty.grouped:
         language_groups(repos, regions)
-    return {"regions": regions, "repositories": repos}
+    return {"regions": regions, "repositories": repos, "region_axis": "language" if by_language else "topic"}
 
 
 def language_family(languages: dict[str, int]) -> str:
@@ -136,6 +153,7 @@ def build_world(world_id: UUID, owner: str, repositories: list[dict], difficulty
     primary = {repo["language"] for repo in data["repositories"] if repo["language"]}
     demo_languages = {language for repo in catalog()["repositories"] for language in repo["languages"]}
     world_atlas = with_language_options(build_atlas(data), primary | demo_languages)
+    world_atlas["region_axis"] = data["region_axis"]
     return World(id=world_id, owner=owner, difficulty=difficulty, catalog=data, atlas=world_atlas)
 
 
