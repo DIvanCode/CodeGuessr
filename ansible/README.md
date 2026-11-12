@@ -25,13 +25,13 @@ In **Settings → Secrets and variables → Actions**, add:
 | --- | --- | --- |
 | Secret (required) | `DOCKERHUB_TOKEN` | Docker Hub access token with write access to `codeguessr-*` repositories; also used to pull images on the server |
 | Secret (required) | `SSH_PASSWORD` | Password for the SSH user in `ansible/deploy/inventory` (defaults to `root`) |
-| Secret (optional) | `GITHUB_API_TOKEN` | Fine-grained GitHub personal access token, read-only where possible, passed to Backend as `GITHUB_TOKEN` |
+| Secret (optional) | `GH_API_TOKEN` | Fine-grained GitHub personal access token, read-only where possible, passed to Backend as `GITHUB_TOKEN` |
 | Variable (required) | `SSH_KNOWN_HOSTS` | **Verified** public SSH host key line, e.g. `201.34.148.71 ssh-ed25519 AAAA...` |
 | Variable (optional) | `DOCKERHUB_USERNAME` | Docker Hub namespace (defaults to `divancode74`) |
 
 Use **Secrets**, not plain Actions Variables, for tokens and passwords. The
-`GITHUB_API_TOKEN` is **not** `${{ secrets.GITHUB_TOKEN }}`, which is the short-lived
-automatic token for GitHub Actions itself. `GITHUB_API_TOKEN` is optional; with no
+`GH_API_TOKEN` is **not** `${{ secrets.GITHUB_TOKEN }}`, which is the short-lived
+automatic token for GitHub Actions itself. `GH_API_TOKEN` is optional; with no
 token, the Backend can still use GitHub's unauthenticated public API with lower limits.
 
 `SSH_KNOWN_HOSTS` is a public *server host key*, used to verify the SSH endpoint.
@@ -51,7 +51,7 @@ as `guessr.coduels.pro`. The public production host is specified in
 password or production `.env` file is needed.
 
 For **local development only**, `compose.yaml` continues reading `.env` from
-`.env.example`. This does not conflict with injecting `GITHUB_API_TOKEN` as the
+`.env.example`. This does not conflict with injecting `GH_API_TOKEN` as the
 `GITHUB_TOKEN` container environment variable during production deployment.
 
 ## Server prerequisites
@@ -93,7 +93,7 @@ ansible-galaxy collection install -r ansible/requirements.yml
 export DOCKERHUB_TOKEN='...'
 export SSH_PASSWORD='...'
 export SSH_KNOWN_HOSTS='201.34.148.71 ssh-ed25519 <verified-base64-key>'
-# optionally: export GITHUB_API_TOKEN='...'
+# optionally: export GH_API_TOKEN='...'
 
 ansible-playbook -i ansible/build/inventory ansible/build/playbook.yml \
   --extra-vars "version=$(git rev-parse HEAD)"

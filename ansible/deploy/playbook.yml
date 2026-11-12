@@ -33,7 +33,7 @@
     domain: guessr.coduels.pro
     docker_hub_username: "{{ lookup('env', 'DOCKERHUB_USERNAME') | default('divancode74', true) }}"
     docker_hub_token: "{{ lookup('env', 'DOCKERHUB_TOKEN') }}"
-    github_token: "{{ lookup('env', 'GITHUB_API_TOKEN') }}"
+    github_token: "{{ lookup('env', 'GH_API_TOKEN') }}"
     ansible_password: "{{ lookup('env', 'SSH_PASSWORD') }}"
     app_root: /opt/codeguessr
     docker_auth_dir: /opt/codeguessr/.docker-auth

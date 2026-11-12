@@ -125,7 +125,7 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          GITHUB_API_TOKEN: ${{ secrets.GITHUB_API_TOKEN }}
+          GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
         run: |
           ansible-playbook -i ansible/deploy/inventory ansible/deploy/playbook.yml \
             --extra-vars "version=$IMAGE_TAG"
