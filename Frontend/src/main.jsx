@@ -268,6 +268,7 @@ function App() {
   const [folders, setFolders] = useState({});
   const total = game.world?.total ?? TOTAL;
   const [hasContext, setHasContext] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const finished = game.history.length;
   const score = game.history.reduce((sum, item) => sum + item.score, 0);
   const number = Math.min(total, round?.result ? finished : finished + 1);
@@ -447,7 +448,8 @@ function App() {
               {!round.result && <HintValues values={round.hint_values} />}
               {hasGraph ? (
                 <CodeExplorer key={round.id} round={round} file={file} api={api}
-                  onContextAvailable={setHasContext} onFile={selectFile} />
+                  onContextAvailable={setHasContext} onFile={selectFile}
+                  graphOpen={graphOpen} onGraphToggle={() => setGraphOpen(open => !open)} />
               ) : (
                 <Editor key={round.id} round={round} file={file} onFile={selectFile} />
               )}
@@ -468,13 +470,12 @@ function App() {
         <Atlas key={round?.id ?? "loading"} data={data} difficulty={data.difficulty ?? game.difficulty}
           folders={folders} onNeedFolders={needFolders} enabled={Boolean(round && !round.result && !pending)}
           ownerMap={Boolean(game.world)} choice={game.draft.choice} pin={game.draft.pin} result={round?.result} hint={round?.region}
-          onChoose={draft} />
-        <section className="answer" aria-label="Ответ">
+          onChoose={draft}>
           {round && (round.result
             ? <Result result={round.result} data={data} draft={game.draft} finished={finished >= total} score={score} onNext={next} />
             : <GuessForm draft={game.draft} languageOptions={data.language_options} starBands={round.star_bands}
               onDraft={draft} onSubmit={submit} pending={pending} />)}
-        </section>
+        </Atlas>
       </main>
     </>
   );

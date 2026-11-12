@@ -21,7 +21,6 @@ function Slice({ color, start, share, active, onClick }) {
 }
 
 export function LanguagePie({ options, shares, onChange }) {
-  const [candidate, setCandidate] = useState("");
   const [selected, setSelected] = useState(null);
   const unassigned = 100 - totalShare(shares);
   const available = options.filter(name => !(name in shares));
@@ -36,11 +35,10 @@ export function LanguagePie({ options, shares, onChange }) {
   });
   if (unassigned > 0) slices.push({ name: "None", share: unassigned, start, color: "#304853" });
 
-  function addLanguage() {
-    if (!remaining.includes(candidate)) return;
-    onChange(setShare(shares, candidate, 10));
-    setSelected(candidate);
-    setCandidate("");
+  function addLanguage(name) {
+    if (!remaining.includes(name)) return;
+    onChange(setShare(shares, name, 10));
+    setSelected(name);
   }
 
   function removeLanguage() {
@@ -75,12 +73,11 @@ export function LanguagePie({ options, shares, onChange }) {
         </ul>
       </div>
       <div className="language-add">
-        <select aria-label="Язык для добавления" value={candidate} disabled={!remaining.length}
-          onChange={event => setCandidate(event.target.value)}>
-          <option value="">Добавить язык…</option>
+        <select aria-label="Добавить язык" value="" disabled={!remaining.length}
+          onChange={event => addLanguage(event.target.value)}>
+          <option value="">+ Добавить язык…</option>
           {remaining.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
-        <button type="button" aria-label="Добавить язык" disabled={!candidate} onClick={addLanguage}>+</button>
       </div>
       {active && (
         <div className="language-adjust">
