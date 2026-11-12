@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { CallGraph } from "./CallGraph.jsx";
 
-export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
+export function CodeExplorer({ round, file, onFile, onContextAvailable, api, graphOpen, onGraphToggle }) {
+  const graphId = useId();
   const [selection, setSelection] = useState({ nodeId: file.entry_node_id, scrollTop: 0, scrollLeft: 0 });
   const positions = useRef({});
   const cache = useRef(new Map());
@@ -74,16 +75,24 @@ export function CodeExplorer({ round, file, onFile, onContextAvailable, api }) {
           {round.files.map(item => <button key={item.id} type="button" aria-pressed={file.id === item.id}
             onClick={() => chooseFile(item)}>{item.name}</button>)}
         </div>
-      </div>
-      <div className="graph-toolbar">
-        <strong>Граф вызовов</strong><span>Прямые связи · 1 шаг</span>
-        <div><button type="button" onClick={() => navigate(file.entry_node_id)} disabled={!isCurrent || selection.nodeId === file.entry_node_id}>К началу</button></div>
+        <button type="button" className="graph-toggle" aria-expanded={graphOpen} aria-controls={graphId}
+          title="Прямые вызовы функции: переходите по ним, чтобы читать соседний код" onClick={onGraphToggle}>
+          Граф вызовов {graphOpen ? "▴" : "▾"}
+        </button>
       </div>
       {error && <div className="graph-message" role="alert"><p>{error}</p><button type="button" onClick={() => setRetry(value => value + 1)}>Повторить</button></div>}
-      {!graph ? !error && <div className="graph-message" role="status">Загружаем связи…</div> : (
+      {!graph ? !error && <div className="graph-message" role="status">Загружаем код…</div> : (
           <>
-            <CallGraph graph={graph} onNavigate={navigate} disabled={!isCurrent} />
-            <div className="source-bar" aria-live="polite"><strong>{graph.node.name}</strong><span>{source ? `${source.name} · ${source.lines.length} строк` : "Исходник недоступен"}</span></div>
+            <div id={graphId} hidden={!graphOpen}>
+              <CallGraph graph={graph} onNavigate={navigate} disabled={!isCurrent} />
+            </div>
+            <div className="source-bar" aria-live="polite">
+              <strong>{graph.node.name}</strong>
+              <span>{source ? `${source.name} · ${source.lines.length} строк` : "Исходник недоступен"}</span>
+              {selection.nodeId !== file.entry_node_id && (
+                <button type="button" onClick={() => navigate(file.entry_node_id)} disabled={!isCurrent}>К началу</button>
+              )}
+            </div>
             {source ? <div ref={code} key={graph.node.id} className="code" tabIndex={0} aria-label={`Код ${graph.node.name}`}>
               {source.lines.map((line, index) => <div className="code-line" key={source.start + index}>
                 <span className="line-number" aria-hidden="true">{source.start + index}</span>

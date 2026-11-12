@@ -10,7 +10,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const polygonPoints = polygon => polygon.map(point => point.join(",")).join(" ");
 const shades = ["#f9f0dd 13%", "#0e252d 14%", "#f9f0dd 29%", "#0e252d 5%", "#0e252d 26%"];
 const LEVEL_TITLES = { region: "Материки", group: "Группы", repository: "Репозитории", folder: "Папки" };
-const SIMILAR_PROJECTS = "похожие проекты по описанию и topics";
+const SIMILAR_PROJECTS ="похожие проекты по описанию и topics";
 const AXES = {
   demo: { label: "Шесть тематических материков", region: "тематика проекта", group: "семейство языков" },
   topic: { label: "Материки из похожих по описанию проектов", region: SIMILAR_PROJECTS, group: "основной язык" },
@@ -136,7 +136,7 @@ function inView(view, item) {
   return item.x >= view.x && item.x <= view.x + view.width && item.y >= view.y && item.y <= view.y + view.height;
 }
 
-export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enabled, choice, pin, result, hint, onChoose }) {
+export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enabled, choice, pin, result, hint, onChoose, children }) {
   const svg = useRef(null);
   const drag = useRef(null);
   const touches = useRef(new Map());
@@ -152,7 +152,8 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
   const [tooltip, setTooltip] = useState(null);
   const [query, setQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  const zoom = BASE.width / view.width;
+  const [panelOpen, setPanelOpen] = useState(true);
+  const zoom =BASE.width / view.width;
   const depth = steps.reduce((deepest, step, index) => (zoom >= step ? index : deepest), 0);
   const choiceDepth = difficulty === "easy" ? levels.length - 1 : depth;
   const visibleLevel = level => levels.includes(level) && levels.indexOf(level) <= choiceDepth;
@@ -186,6 +187,8 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
   }, []);
+
+  useEffect(() => { setPanelOpen(true); }, [choice, pin]);
 
   useEffect(() => {
     if (!result) return;
@@ -368,97 +371,107 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
 
   return (
     <section className="atlas" aria-label="Карта репозиториев GitHub">
-      <div className="map-wrap">
-        <svg
-          ref={svg} id="map" className={dragging ? "dragging" : ""} role="img"
-          viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
-          aria-label={`${axes.label}. Каждая страна — один репозиторий.`}
-          onPointerDown={pointerDown} onPointerMove={pointerMove}
-          onPointerUp={pointerUp} onPointerCancel={endDrag} onPointerLeave={() => setTooltip(null)}
-        >
-          <defs>
-            <pattern id="sea-grid" width="48" height="48" patternUnits="userSpaceOnUse">
-              <path d="M 48 0 H 0 V 48" fill="none" stroke="#78949c" strokeOpacity=".13" />
-            </pattern>
-          </defs>
-          <rect x="-1000" y="-1000" width="3000" height="3000" fill="url(#sea-grid)" />
-          {data.regions.map(region => (
-            <g key={region.id} className={hint && hint !== region.id ? "continent dim" : "continent"} style={{ "--land": region.color }}>
-              <polygon points={polygonPoints(region.outline)} className="continental-shelf" />
-              <polygon points={polygonPoints(region.outline)} className={`coastline${guessedRegion === region.id ? " selected" : ""}`} />
-              {data.groups.filter(group => group.region === region.id).map((group, index) => (
-                <polygon key={group.id} points={polygonPoints(group.polygon)} style={{ "--shade": shadeOf(index) }}
-                  className={`group${repositoriesShown ? " behind" : ""}${guessedGroup === group.id ? " selected" : ""}`} />
-              ))}
-              {data.repositories.filter(repo => repo.region === region.id).map(repo => (
-                <polygon
-                  key={repo.id} points={polygonPoints(repo.polygon)} style={{ "--shade": shadeOf(repo.id) }}
-                  className={`country${repositoriesShown ? "" : " concealed"}${guessedCountry === repo.id ? " selected" : ""}${answer?.repository_id === repo.id ? " correct" : ""}`}
-                />
-              ))}
-            </g>
-          ))}
-          {shownFolders.map((folder, index) => {
-            const region = data.regions.find(item => item.id === data.repositories.find(repo => repo.id === folder.repo).region);
-            const selected = guessedFolder?.repo === folder.repo && guessedFolder.id === folder.id;
-            const correct = answer?.repository_id === folder.repo && answer?.folder === folder.id;
-            return (
-              <polygon key={`${folder.repo}:${folder.id}`} points={polygonPoints(folder.polygon)}
-                style={{ "--land": region.color, "--shade": shadeOf(index + 2) }}
-                className={`folder${selected ? " selected" : ""}${correct ? " correct" : ""}`} />
-            );
-          })}
-          {answer?.folder_polygon && <polygon points={polygonPoints(answer.folder_polygon)} className="folder answer-area" />}
-          {depth === 0 && data.regions.map(region => (
-            <text key={region.id} x={region.x} y={region.y} className="island-label" style={labelStyle(ISLAND_LABEL_SIZE)}>{region.name}</text>
-          ))}
-          {labels.map(label => <text key={label.key} x={label.x} y={label.y} className="country-label" style={labelStyle(LABEL_SIZE)}>{label.text}</text>)}
-          {guess && answer && <line className="answer-line" x1={guess.x} y1={guess.y} x2={answer.x} y2={answer.y} />}
-          <Marker point={guess} zoom={zoom} />
-          <Marker point={answer} zoom={zoom} correct />
-        </svg>
+      <div className="map-area">
+        <div className="map-wrap">
+          <svg
+            ref={svg} id="map" className={dragging ? "dragging" : ""} role="img"
+            viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
+            aria-label={`${axes.label}. Каждая страна — один репозиторий.`}
+            onPointerDown={pointerDown} onPointerMove={pointerMove}
+            onPointerUp={pointerUp} onPointerCancel={endDrag} onPointerLeave={() => setTooltip(null)}
+          >
+            <defs>
+              <pattern id="sea-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+                <path d="M 48 0 H 0 V 48" fill="none" stroke="#78949c" strokeOpacity=".13" />
+              </pattern>
+            </defs>
+            <rect x="-1000" y="-1000" width="3000" height="3000" fill="url(#sea-grid)" />
+            {data.regions.map(region => (
+              <g key={region.id} className={hint && hint !== region.id ? "continent dim" : "continent"} style={{ "--land": region.color }}>
+                <polygon points={polygonPoints(region.outline)} className="continental-shelf" />
+                <polygon points={polygonPoints(region.outline)} className={`coastline${guessedRegion === region.id ? " selected" : ""}`} />
+                {data.groups.filter(group => group.region === region.id).map((group, index) => (
+                  <polygon key={group.id} points={polygonPoints(group.polygon)} style={{ "--shade": shadeOf(index) }}
+                    className={`group${repositoriesShown ? " behind" : ""}${guessedGroup === group.id ? " selected" : ""}`} />
+                ))}
+                {data.repositories.filter(repo => repo.region === region.id).map(repo => (
+                  <polygon
+                    key={repo.id} points={polygonPoints(repo.polygon)} style={{ "--shade": shadeOf(repo.id) }}
+                    className={`country${repositoriesShown ? "" : " concealed"}${guessedCountry === repo.id ? " selected" : ""}${answer?.repository_id === repo.id ? " correct" : ""}`}
+                  />
+                ))}
+              </g>
+            ))}
+            {shownFolders.map((folder, index) => {
+              const region = data.regions.find(item => item.id === data.repositories.find(repo => repo.id === folder.repo).region);
+              const selected = guessedFolder?.repo === folder.repo && guessedFolder.id === folder.id;
+              const correct = answer?.repository_id === folder.repo && answer?.folder === folder.id;
+              return (
+                <polygon key={`${folder.repo}:${folder.id}`} points={polygonPoints(folder.polygon)}
+                  style={{ "--land": region.color, "--shade": shadeOf(index + 2) }}
+                  className={`folder${selected ? " selected" : ""}${correct ? " correct" : ""}`} />
+              );
+            })}
+            {answer?.folder_polygon && <polygon points={polygonPoints(answer.folder_polygon)} className="folder answer-area" />}
+            {depth === 0 && data.regions.map(region => (
+              <text key={region.id} x={region.x} y={region.y} className="island-label" style={labelStyle(ISLAND_LABEL_SIZE)}>{region.name}</text>
+            ))}
+            {labels.map(label => <text key={label.key} x={label.x} y={label.y} className="country-label" style={labelStyle(LABEL_SIZE)}>{label.text}</text>)}
+            {guess && answer && <line className="answer-line" x1={guess.x} y1={guess.y} x2={answer.x} y2={answer.y} />}
+            <Marker point={guess} zoom={zoom} />
+            <Marker point={answer} zoom={zoom} correct />
+          </svg>
 
-        <div className="search" onBlur={event => {
-          if (!event.currentTarget.contains(event.relatedTarget)) setShowSearch(false);
-        }}>
-          <label className="search-box">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" />
-            </svg>
-            <input type="search" maxLength={200} autoComplete="off" value={query}
-              placeholder="Найти репозиторий…" aria-label="Поиск репозитория" aria-controls="search-results" disabled={!enabled}
-              onFocus={() => setShowSearch(true)} onChange={event => { setQuery(event.target.value); setShowSearch(true); }}
-              onKeyDown={event => {
-                if (event.key === "Escape") setShowSearch(false);
-                if (event.key === "Enter" && showSearch && searchText) chooseFromSearch(matches[0]);
-              }}
-            />
-          </label>
-          {enabled && showSearch && searchText && (
-            <div id="search-results" className="search-results">
-              {matches.length ? matches.map(repo => (
-                <button key={repo.id} type="button" onClick={() => chooseFromSearch(repo)}>
-                  {repo.name}<small>≈ {repo.size_mb} МБ</small>
-                </button>
-              )) : <button type="button" onClick={() => chooseFromSearch()}>Указать «{query.trim()}»</button>}
+          <div className="search" onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setShowSearch(false);
+          }}>
+            <label className="search-box">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" />
+              </svg>
+              <input type="search" maxLength={200} autoComplete="off" value={query}
+                placeholder="Найти репозиторий…" aria-label="Поиск репозитория" aria-controls="search-results" disabled={!enabled}
+                onFocus={() => setShowSearch(true)} onChange={event => { setQuery(event.target.value); setShowSearch(true); }}
+                onKeyDown={event => {
+                  if (event.key === "Escape") setShowSearch(false);
+                  if (event.key === "Enter" && showSearch && searchText) chooseFromSearch(matches[0]);
+                }}
+              />
+            </label>
+            {enabled && showSearch && searchText && (
+              <div id="search-results" className="search-results">
+                {matches.length ? matches.map(repo => (
+                  <button key={repo.id} type="button" onClick={() => chooseFromSearch(repo)}>
+                    {repo.name}<small>≈ {repo.size_mb} МБ</small>
+                  </button>
+                )) : <button type="button" onClick={() => chooseFromSearch()}>Указать «{query.trim()}»</button>}
+              </div>
+            )}
+          </div>
+          <div className="zoom" aria-label="Масштаб карты">
+            <button type="button" aria-label="Приблизить" onClick={() => setView(value => zoomed(value, 1.4, maxZoom))}>+</button>
+            <button type="button" aria-label="Отдалить" onClick={() => setView(value => zoomed(value, 1 / 1.4, maxZoom))}>−</button>
+            <button type="button" aria-label="Показать всю карту" onClick={() => setView(BASE)}>↗</button>
+          </div>
+          {tooltip && (
+            <div className="map-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
+              <strong>{tooltip.text}</strong>
+              {tooltip.size !== undefined && <><br /><span>≈ {tooltip.size} МБ</span></>}
             </div>
           )}
+          <div className="map-status">
+            {levels.length > 2 && <span className="map-depth">{LEVEL_TITLES[levels[depth]]} · ×{zoom.toFixed(1)}</span>}
+            {hintRegion && !result && <span className="map-region">{hintRegion.name}</span>}
+          </div>
         </div>
-        <div className="zoom" aria-label="Масштаб карты">
-          <button type="button" aria-label="Приблизить" onClick={() => setView(value => zoomed(value, 1.4, maxZoom))}>+</button>
-          <button type="button" aria-label="Отдалить" onClick={() => setView(value => zoomed(value, 1 / 1.4, maxZoom))}>−</button>
-          <button type="button" aria-label="Показать всю карту" onClick={() => setView(BASE)}>↗</button>
-        </div>
-        {tooltip && (
-          <div className="map-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
-            <strong>{tooltip.text}</strong>
-            {tooltip.size !== undefined && <><br /><span>≈ {tooltip.size} МБ</span></>}
+        {children && (
+          <div className={`answer-panel${panelOpen ? "" : " collapsed"}`} aria-label="Ответ">
+            <button type="button" className="panel-toggle" aria-expanded={panelOpen} onClick={() => setPanelOpen(open => !open)}>
+              {panelOpen ? "Свернуть ▾" : result ? "Результат раунда ▴" : "Развернуть ▴"}
+            </button>
+            <div className="panel-body">{children}</div>
           </div>
         )}
-        <div className="map-status">
-          {levels.length > 2 && <span className="map-depth">{LEVEL_TITLES[levels[depth]]} · ×{zoom.toFixed(1)}</span>}
-          {hintRegion && !result && <span className="map-region">{hintRegion.name}</span>}
-        </div>
       </div>
       <footer className="legend">
         <span><b>Материк</b> — {axes.region}</span>
