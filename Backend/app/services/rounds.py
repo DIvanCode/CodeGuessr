@@ -3,14 +3,9 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 from uuid import UUID
 
-from pygments import highlight
-from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_for_filename
-from pygments.lexers.special import TextLexer
-from pygments.util import ClassNotFound
-
 from app.schemas.game import STAR_BANDS, Guess
-from app.services.call_graph import entry_node, make_call_graph
+from app.services.call_graph import entry_node, highlight_lines, make_call_graph
+from app.services.function_analysis import extract_functions
 from app.services.difficulty import Difficulty
 from app.services.sources import SourceFile
 from app.services.worlds import World, locate
@@ -48,32 +43,28 @@ def demo_sources(repo: dict, demo: dict) -> list[SourceFile]:
 def make_snapshot(
     world: World, repo: dict, year: int, sources: list[SourceFile],
     *, folder: dict | None = None, functions: list[list[dict]] | None = None,
+    graph_sources: list[SourceFile] | None = None,
 ) -> dict:
     difficulty = world.difficulty
     country = world.country(repo["id"])
+    all_sources = sources + (graph_sources or [])
+    if functions is None:
+        functions = [extract_functions(source.path, source.text) for source in all_sources]
     files = []
-    for source in sources:
-        lines = source.text.splitlines()
-        start = source.start
-        context_start = max(0, start - difficulty.context_length)
-        try:
-            lexer = get_lexer_for_filename(source.path, stripnl=False)
-        except ClassNotFound:
-            lexer = TextLexer(stripnl=False)
-        code = "\n".join(line[:500] for line in lines[: start + difficulty.snippet_length])
-        highlighted = highlight(code, lexer, HtmlFormatter(nowrap=True)).split("\n")
-        files.append({
-            "path": source.path,
-            "ref": repo["branch"],
-            "context_start": context_start + 1,
-            "start": start + 1,
-            "lines": highlighted[context_start:start + difficulty.snippet_length],
-            "full_lines": highlight(source.text, lexer, HtmlFormatter(nowrap=True)).splitlines(),
-        })
-        if functions is not None:
-            files[-1]["full_lines"] = highlight(
-                source.text, lexer, HtmlFormatter(nowrap=True)
-            ).split("\n")
+    for index, (source, file_functions) in enumerate(zip(all_sources, functions, strict=True)):
+        file = {"path": source.path, "ref": repo["branch"]}
+        if index < len(sources):
+            start = source.start
+            context_start = max(0, start - difficulty.context_length)
+            end = start + difficulty.snippet_length
+            code = "\n".join(line[:500] for line in source.text.splitlines()[:end])
+            file.update(
+                context_start=context_start + 1, start=start + 1,
+                lines=highlight_lines(source.path, code)[context_start:end],
+            )
+        if file_functions:
+            file["source_text"] = source.text
+        files.append(file)
     target = folder or country
     return {
         "year": year,
@@ -86,7 +77,10 @@ def make_snapshot(
         "x": target["x"],
         "y": target["y"],
         "files": files,
-        "call_graph": make_call_graph(functions or []),
+        "clue_file_count": len(sources),
+        "graph_min_lines": difficulty.snippet_length,
+        "graph_context_lines": difficulty.context_length,
+        "call_graph": make_call_graph(functions),
     }
 
 
@@ -112,7 +106,7 @@ def public_round(round_: GameRound) -> dict:
                 "lines": file["lines"] if hints.get("context") else file["lines"][file["start"] - file["context_start"]:],
                 "has_context": file["start"] > file["context_start"],
             }
-            for index, file in enumerate(round_.snapshot["files"])
+            for index, file in enumerate(round_.snapshot["files"][:round_.snapshot["clue_file_count"]])
         ],
         "result": round_.result,
     }
@@ -187,7 +181,7 @@ def grade(round_: GameRound, guess: Guess) -> dict:
             "url": repo_url,
             "files": [
                 {"path": file["path"], "url": f"{repo_url}/blob/{quote(file['ref'], safe='')}/{quote(file['path'])}"}
-                for file in answer["files"]
+                for file in answer["files"][:answer["clue_file_count"]]
             ],
         },
     }

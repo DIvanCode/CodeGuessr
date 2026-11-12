@@ -27,11 +27,11 @@ class Difficulty:
 DIFFICULTIES: dict[str, Difficulty] = {
     "easy": Difficulty(
         name="easy", max_repositories=20, levels=("region", "repository"), level_points=(1500, 5000),
-        distance_scale=135, files=2, snippet_length=35, context_length=8,
+        distance_scale=135, files=2, snippet_length=60, context_length=8,
     ),
     "medium": Difficulty(
         name="medium", max_repositories=80, levels=("region", "group", "repository"), level_points=(1000, 2500, 5000),
-        distance_scale=90, files=3, snippet_length=50, context_length=15,
+        distance_scale=90, files=3, snippet_length=60, context_length=15,
     ),
     "hard": Difficulty(
         name="hard", max_repositories=300, levels=("region", "group", "repository", "folder"),
