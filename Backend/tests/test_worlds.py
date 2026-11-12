@@ -3,16 +3,20 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.services.github import OwnerNotFound, RateLimited, parse_owner
-from app.services.worlds import language_shares
+from app.services.worlds import MAX_FOLDERS, OTHER_FOLDERS, folder_layout, language_shares, truncated_layout
 
 PYTHON_SOURCE = "\n".join(f"def handler_{index}(request):\n    return request.value + {index}\n" for index in range(40))
 GO_SOURCE = "\n".join(f"func Handler{index}() int {{\n    return {index}\n}}\n" for index in range(30))
 
 
-def remote_repo(name: str, language: str | None, stars: int, *, fork: bool = False, size: int = 2048) -> dict:
+def remote_repo(
+    name: str, language: str | None, stars: int, *, fork: bool = False, size: int = 2048,
+    description: str | None = None, topics: list[str] | None = None,
+) -> dict:
     return {
         "full_name": f"acme/{name}", "fork": fork, "size": size, "language": language,
         "stargazers_count": stars, "default_branch": "main", "created_at": "2016-05-01T10:00:00Z",
+        "description": description, "topics": topics or [],
     }
 
 
@@ -38,14 +42,14 @@ class FakeGitHub:
             raise self.failure
         return {"login": "acme"}
 
-    async def repositories(self, login: str) -> list[dict]:
+    async def repositories(self, login: str, limit: int) -> list[dict]:
         return self.remote
 
     async def languages(self, full_name: str) -> dict[str, int]:
         return {"Python": 7000, "Go": 2500, "Shell": 500}
 
-    async def tree(self, full_name: str, branch: str) -> list[dict]:
-        return self.trees.get(full_name, [])
+    async def tree(self, full_name: str, ref: str, *, recursive: bool = True) -> tuple[list[dict], bool]:
+        return self.trees.get(full_name, []), False
 
     async def file(self, full_name: str, branch: str, path: str) -> str | None:
         return self.files.get(path)
@@ -71,20 +75,32 @@ def test_language_shares_sum_to_one_hundred() -> None:
     assert language_shares({}) == {}
 
 
-def test_world_groups_owner_repositories_by_primary_language() -> None:
+def test_world_groups_owner_repositories_into_topics() -> None:
     github = FakeGitHub([
-        remote_repo("api", "Python", 500), remote_repo("cli", "Go", 30),
-        remote_repo("docs", None, 3), remote_repo("forked", "Rust", 900, fork=True),
-        remote_repo("empty", "Python", 1, size=0),
+        remote_repo("weather-bot", "Python", 500, topics=["telegram", "bot"]),
+        remote_repo("notes-bot", "Go", 30, topics=["telegram", "bot"]),
+        remote_repo("music-bot", None, 3, description="Discord bot for music"),
+        remote_repo("snake", "Python", 20, topics=["game"]),
+        remote_repo("tetris", "Go", 10, description="Tetris game in the terminal"),
+        remote_repo("chess", "Rust", 5, topics=["game", "chess"]),
+        remote_repo("forked", "Rust", 900, fork=True, topics=["game"]),
+        remote_repo("empty", "Python", 1, size=0, topics=["bot"]),
     ])
     with TestClient(create_app(github)) as client:
         response = client.post("/api/worlds", json={"url": "https://github.com/acme"})
         assert response.status_code == 201
         world = response.json()
         assert world["owner"] == "acme"
-        assert [region["name"] for region in world["regions"]] == ["Python", "Go", "Другое"]
-        assert [repo["name"] for repo in world["repositories"]] == ["acme/api", "acme/cli", "acme/docs"]
-        assert {"Python", "Go"}.issubset(world["language_options"])
+        regions = {region["id"]: region["name"] for region in world["regions"]}
+        members = {
+            regions[region]: sorted(repo["name"] for repo in world["repositories"] if repo["region"] == region)
+            for region in regions
+        }
+        assert members == {
+            "bot · telegram": ["acme/music-bot", "acme/notes-bot", "acme/weather-bot"],
+            "game": ["acme/chess", "acme/snake", "acme/tetris"],
+        }
+        assert {"Python", "Go", "Rust"}.issubset(world["language_options"])
         assert client.get(f"/api/worlds/{world['id']}").json() == world
 
 
@@ -123,3 +139,108 @@ def test_owner_without_code_and_unknown_world() -> None:
         unknown = "00000000-0000-0000-0000-000000000000"
         assert client.get(f"/api/worlds/{unknown}").status_code == 404
         assert client.post("/api/rounds", json={"world": unknown}).status_code == 404
+
+
+def test_folder_layout_skips_shared_prefix_and_merges_small_folders() -> None:
+    files = [{"path": f"src/pkg/mod{index}/file.py", "size": 1000 + index} for index in range(12)]
+    files.append({"path": "src/pkg/setup.py", "size": 500})
+    layout = folder_layout(files)
+    ids = [folder["id"] for folder in layout]
+    assert len(layout) == MAX_FOLDERS
+    assert ids[0] == "src/pkg/mod11/"
+    assert ids[-1] == OTHER_FOLDERS
+    assert sum(len(folder["files"]) for folder in layout) == len(files)
+
+
+def hard_world_github() -> FakeGitHub:
+    github = FakeGitHub([
+        {**remote_repo("api", "Python", 500), "created_at": "2014-01-01T00:00:00Z"},
+        {**remote_repo("cli", "Python", 30), "created_at": "2021-01-01T00:00:00Z"},
+    ])
+    github.trees["acme/api"] = [
+        {"path": "server/app.py", "type": "blob", "size": len(PYTHON_SOURCE)},
+        {"path": "server/routes.py", "type": "blob", "size": len(PYTHON_SOURCE)},
+        {"path": "client/main.go", "type": "blob", "size": len(GO_SOURCE)},
+    ]
+    github.files["server/routes.py"] = PYTHON_SOURCE
+    return github
+
+
+def test_medium_world_groups_repositories_by_primary_language() -> None:
+    github = hard_world_github()
+    github.remote[1]["language"] = "Go"
+    with TestClient(create_app(github)) as client:
+        world = client.post("/api/worlds", json={"url": "acme", "difficulty": "medium"}).json()
+    assert world["difficulty"] == "medium"
+    assert {group["name"] for group in world["groups"]} == {"Python", "Go"}
+    assert all(repo["group"] for repo in world["repositories"])
+
+
+def test_hard_round_targets_a_folder_and_scores_by_level() -> None:
+    github = hard_world_github()
+    with TestClient(create_app(github)) as client:
+        world = client.post("/api/worlds", json={"url": "acme", "difficulty": "hard"}).json()
+        folders = client.get(f"/api/worlds/{world['id']}/repositories/1/folders").json()["folders"]
+        assert {folder["id"] for folder in folders} == {"server/", "client/"}
+
+        round_ = client.post("/api/rounds", json={"world": world["id"], "exclude": [2]}).json()
+        assert round_["difficulty"] == "hard"
+        assert round_["hint_costs"]["path"] == 1500
+        assert all(len(file["lines"]) <= 70 for file in round_["files"])
+
+        result = client.post(f"/api/rounds/{round_['id']}/guess", json={"repository": "acme/cli"}).json()["result"]
+        answer = result["answer"]
+        assert answer["folder"] in {"server/", "client/"}
+        assert result["location"]["repository"] == 2
+        assert result["location"]["region"] == answer["region"]
+        assert result["breakdown"]["repository"] >= 750
+
+        target = next(folder for folder in folders if folder["id"] == answer["folder"])
+        exact = client.post("/api/rounds", json={"world": world["id"], "exclude": [2]}).json()
+        exact_result = client.post(f"/api/rounds/{exact['id']}/guess", json={
+            "pin": {"x": target["x"], "y": target["y"]},
+        }).json()["result"]
+        expected = 5000 if exact_result["answer"]["folder"] == target["id"] else 3500
+        assert exact_result["breakdown"]["repository"] >= expected
+        assert exact_result["location"]["folder"] == target["id"]
+
+
+def test_folders_are_available_only_on_hard_maps() -> None:
+    with TestClient(create_app(hard_world_github())) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+        assert client.get(f"/api/worlds/{world['id']}/repositories/1/folders").status_code == 409
+
+
+def test_guess_depth_limits_level_credit() -> None:
+    with TestClient(create_app(hard_world_github())) as client:
+        world = client.post("/api/worlds", json={"url": "acme", "difficulty": "medium"}).json()
+        round_ = client.post("/api/rounds", json={"world": world["id"], "exclude": [2]}).json()
+        country = next(repo for repo in world["repositories"] if repo["id"] == 1)
+        result = client.post(f"/api/rounds/{round_['id']}/guess", json={
+            "pin": {"x": country["x"], "y": country["y"]}, "depth": 1,
+        }).json()["result"]
+        assert result["location"] == {"region": country["region"], "group": country["group"], "repository": None}
+        assert result["breakdown"]["repository"] == 4500
+
+
+def test_truncated_tree_uses_top_level_directories() -> None:
+    top = [
+        {"path": "kernel", "type": "tree", "sha": "k"}, {"path": "vendor", "type": "tree", "sha": "v"},
+        {"path": "mm", "type": "tree", "sha": "m"}, {"path": "init.c", "type": "blob", "size": 900},
+    ]
+    layout = truncated_layout(top, [{"path": "kernel/fork.c", "size": 4000}])
+    assert {folder["id"]: folder.get("sha") for folder in layout} == {"kernel/": "k", "mm/": "m", "*": None}
+    assert next(folder for folder in layout if folder["id"] == "mm/")["weight"] == 4000 ** 0.5
+
+
+def test_github_rounds_show_snippets_without_call_graph() -> None:
+    github = FakeGitHub([remote_repo("api", "Python", 500), remote_repo("cli", "Go", 30)])
+    with TestClient(create_app(github)) as client:
+        world = client.post("/api/worlds", json={"url": "acme"}).json()
+        round_ = client.post("/api/rounds", json={"world": world["id"]}).json()
+        path = f"/api/rounds/{round_['id']}"
+        file = round_["files"][0]
+        assert file["entry_node_id"] is None
+        assert file["lines"]
+        expanded = client.post(path + "/hint", json={"kind": "context"}).json()["files"][0]
+        assert expanded["start"] < file["start"]

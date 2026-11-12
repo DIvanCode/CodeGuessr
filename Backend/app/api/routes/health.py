@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from app.services.atlas import atlas
-from app.services.catalog import demo_repositories
+from app.services.catalog import catalog, demo_repositories
 
 router = APIRouter()
 
@@ -14,7 +13,7 @@ async def ping() -> dict[str, str]:
 @router.get("/health/ready")
 async def ready() -> dict[str, str]:
     try:
-        if atlas()["repositories"] and demo_repositories():
+        if catalog()["repositories"] and demo_repositories():
             return {"status": "ok"}
     except (OSError, ValueError, KeyError):
         pass

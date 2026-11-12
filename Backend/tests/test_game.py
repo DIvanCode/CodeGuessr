@@ -81,3 +81,15 @@ def test_exact_distributions_reach_the_round_maximum() -> None:
         })
     result = response.json()["result"]
     assert result["score"] == result["max_score"] == 8750
+
+
+def test_medium_demo_map_nests_repositories_in_language_families() -> None:
+    with TestClient(create_app()) as client:
+        data = client.get("/api/map", params={"difficulty": "medium"}).json()
+    assert data["difficulty"] == "medium"
+    groups = {group["id"]: group for group in data["groups"]}
+    assert {group["name"] for group in groups.values()} >= {"C и C++", "JavaScript и TypeScript"}
+    for group in groups.values():
+        members = [repo for repo in data["repositories"] if repo["group"] == group["id"]]
+        assert members and all(repo["region"] == group["region"] for repo in members)
+        assert abs(sum(area(repo["polygon"]) for repo in members) - area(group["polygon"])) < 1

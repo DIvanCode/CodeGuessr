@@ -1,19 +1,29 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Atlas, LEVELS, describeIds } from "./Atlas.jsx";
 import { CodeExplorer } from "./CodeExplorer.jsx";
-import { Atlas } from "./Atlas.jsx";
 import { LanguagePie } from "./LanguagePie.jsx";
 import { totalShare } from "./language-shares.js";
 import "./style.css";
 
 const TOTAL = 5;
 const YEAR = new Date().getFullYear();
-const STORAGE_KEY = "codeguessr.demo.v2";
+const STORAGE_KEY = "codeguessr.demo.v3";
 const format = new Intl.NumberFormat("ru-RU");
-const blankDraft = () => ({ repository: "", pin: null, country: null, year: null, languages: {}, stars: null });
-const blankGame = (world = null) => ({ history: [], roundId: null, fileId: 0, draft: blankDraft(), world });
+const blankDraft = () => ({
+  repository: "", label: "", pin: null, choice: null, depth: null, year: null, languages: {}, stars: null,
+});
+const blankGame = (world = null, difficulty = "easy") => ({
+  history: [], roundId: null, fileId: 0, draft: blankDraft(), world, difficulty,
+});
 const worldOf = map => ({ id: map.id, owner: map.owner, total: Math.min(TOTAL, map.repositories.length) });
-const emptyMap = { regions: [], repositories: [], language_options: [] };
+const mapKey = (owner, id, difficulty) => (owner ? id : `demo:${difficulty}`);
+const emptyMap = { regions: [], groups: [], repositories: [], language_options: [] };
+const DIFFICULTIES = [
+  ["easy", "Лёгкий", "Материк → репозиторий. 2 файла по 35 строк"],
+  ["medium", "Средний", "Материк → группа → репозиторий. Больше репозиториев, 3 файла по 50 строк"],
+  ["hard", "Сложный", "Материк → группа → репозиторий → папка. До 300 репозиториев, 4 файла по 70 строк из одной папки"],
+];
 const hints = [
   ["context", "Показать строки выше"],
   ["path", "Путь к файлу"],
@@ -24,7 +34,8 @@ const hints = [
 
 function readGame() {
   try {
-    return JSON.parse(sessionStorage.getItem(STORAGE_KEY)) ?? blankGame();
+    const game = JSON.parse(sessionStorage.getItem(STORAGE_KEY)) ?? blankGame();
+    return LEVELS[game.difficulty] ? game : blankGame(game.world);
   } catch {
     return blankGame();
   }
@@ -80,6 +91,17 @@ function OwnerForm({ disabled, onStart }) {
   );
 }
 
+function DifficultyPicker({ value, disabled, onChange }) {
+  return (
+    <div className="difficulty" role="radiogroup" aria-label="Сложность">
+      {DIFFICULTIES.map(([key, label, description]) => (
+        <button key={key} type="button" role="radio" aria-checked={value === key} title={description}
+          disabled={disabled} onClick={() => value !== key && onChange(key)}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
 function Editor({ round, file, onFile }) {
   return (
     <div className="editor">
@@ -127,12 +149,12 @@ function GuessForm({ draft, languageOptions, starBands, onDraft, onSubmit, pendi
       <div className="submit-card">
         <div>
           <small>1 · Выбери репозиторий на карте</small>
-          <div id="selection">{draft.repository || (draft.pin ? "Пин поставлен на карте" : "Выберите страну или найдите репозиторий")}</div>
+          <div id="selection">{draft.label || draft.repository || (draft.pin ? "Пин поставлен в море" : "Выберите место на карте или найдите репозиторий")}</div>
         </div>
         {hasLocation && (
           <button type="button" className="clear-year" onClick={() => {
             setLanguagesConfirmed(false);
-            onDraft({ repository: "", pin: null, country: null });
+            onDraft({ repository: "", label: "", pin: null, choice: null, depth: null });
           }}>Убрать выбор</button>
         )}
       </div>
@@ -199,7 +221,7 @@ function sharesLabel(shares) {
   return Object.entries(shares).sort((a, b) => b[1] - a[1]).map(([name, share]) => `${name} ${share}%`).join(", ");
 }
 
-function Result({ result, draft, finished, score, onNext }) {
+function Result({ result, data, draft, finished, score, onNext }) {
   const { answer, breakdown, penalty } = result;
   const nextButton = useRef(null);
   useEffect(() => { nextButton.current?.focus(); }, []);
@@ -211,7 +233,8 @@ function Result({ result, draft, finished, score, onNext }) {
       </div>
       <dl>
         {[
-          ["repository", "Репозиторий", answer.full_name], ["year", "Год", answer.year],
+          ["repository", "Место", describeIds(data, { ...answer, repository: answer.repository_id })],
+          [null, "Ваш выбор", describeIds(data, result.location) || "мимо суши"], ["year", "Год", answer.year],
           ["languages", "Языки", sharesLabel(answer.languages)], ["stars", "Звёзды", format.format(answer.stars)],
           [null, "Размер", `≈ ${format.format(answer.size_mb)} МБ`],
         ].map(([key, label, value]) => (
@@ -242,6 +265,7 @@ function App() {
   const [round, setRound] = useState(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
+  const [folders, setFolders] = useState({});
   const total = game.world?.total ?? TOTAL;
   const [hasContext, setHasContext] = useState(false);
   const finished = game.history.length;
@@ -262,15 +286,35 @@ function App() {
 
   async function loadMap(current) {
     const id = current.world?.id ?? null;
-    if (data.repositories.length && (data.id ?? null) === id) return [data, current];
-    if (!current.world) return [await api("/map"), current];
+    const loadedKey = mapKey(data.owner, data.id, data.difficulty);
+    if (data.repositories.length && loadedKey === mapKey(current.world, id, current.difficulty)) return [data, current];
+    if (!current.world) return [await api(`/map?difficulty=${current.difficulty}`), current];
     try {
       return [await api(`/worlds/${id}`), current];
     } catch (failure) {
       if (failure.status !== 404) throw failure;
     }
-    const rebuilt = await api("/worlds", { url: current.world.owner });
+    const rebuilt = await api("/worlds", { url: current.world.owner, difficulty: current.difficulty });
     return [rebuilt, { ...current, world: worldOf(rebuilt) }];
+  }
+
+  function showMap(map) {
+    if (map.id !== data.id) setFolders({});
+    setData(map);
+  }
+
+  async function needFolders(ids) {
+    const mapId = data.id;
+    setFolders(previous => ({ ...previous, ...Object.fromEntries(ids.map(id => [id, "loading"])) }));
+    await Promise.all(ids.map(async id => {
+      let value = "failed";
+      try {
+        value = (await api(`/worlds/${mapId}/repositories/${id}/folders`)).folders;
+      } catch (failure) {
+        setError(failure.message);
+      }
+      setFolders(previous => ({ ...previous, [id]: value }));
+    }));
   }
 
   async function load(initial, preloadedMap = null) {
@@ -279,7 +323,7 @@ function App() {
     setError("");
     try {
       const [map, withMap] = preloadedMap ? [preloadedMap, initial] : await loadMap(initial);
-      setData(map);
+      showMap(map);
       let current = withMap;
       const rounds = current.world?.total ?? TOTAL;
       let loaded;
@@ -291,7 +335,9 @@ function App() {
           current = current.history.length >= rounds ? blankGame(current.world) : { ...current, roundId: null, fileId: 0, draft: blankDraft() };
         }
       }
-      loaded ??= await api("/rounds", { exclude: current.history.map(item => item.target), world: current.world?.id });
+      loaded ??= await api("/rounds", {
+        exclude: current.history.map(item => item.target), world: current.world?.id, difficulty: current.difficulty,
+      });
       setRound(loaded);
       setGame(storeResult({ ...current, roundId: loaded.id }, loaded));
     } catch (failure) {
@@ -326,27 +372,46 @@ function App() {
 
   function submit(event) {
     event.preventDefault();
-    const { repository, pin, languages, stars, year } = game.draft;
-    if (repository || pin) act("guess", { repository, pin, languages, stars, year });
+    const { repository, pin, depth, languages, stars, year } = game.draft;
+    if (repository || pin) act("guess", { repository, pin, depth, languages, stars, year });
   }
 
   function next() {
-    const newGame = finished >= total ? blankGame(game.world) : { ...game, roundId: null, fileId: 0, draft: blankDraft() };
+    const newGame = finished >= total
+      ? blankGame(game.world, game.difficulty)
+      : { ...game, roundId: null, fileId: 0, draft: blankDraft() };
     setGame(newGame);
     load(newGame);
   }
 
-  async function startWorld(link) {
-    const map = await api("/worlds", { url: link });
-    const newGame = blankGame(worldOf(map));
+  async function startWorld(link, difficulty = game.difficulty) {
+    const map = await api("/worlds", { url: link, difficulty });
+    const newGame = blankGame(worldOf(map), difficulty);
     setGame(newGame);
     await load(newGame, map);
   }
 
   function leaveWorld() {
-    const newGame = blankGame();
+    const newGame = blankGame(null, game.difficulty);
     setGame(newGame);
     load(newGame);
+  }
+
+  async function changeDifficulty(difficulty) {
+    if (!game.world) {
+      const newGame = blankGame(null, difficulty);
+      setGame(newGame);
+      load(newGame);
+      return;
+    }
+    setPending(true);
+    setError("");
+    try {
+      await startWorld(game.world.owner, difficulty);
+    } catch (failure) {
+      setError(failure.message);
+      setPending(false);
+    }
   }
 
   return (
@@ -357,7 +422,8 @@ function App() {
           {Array.from({ length: total }, (_, index) => <span aria-hidden="true" key={index}
             className={`round-dot${index < finished ? " done" : index === finished ? " current" : ""}`} />)}
         </div>
-        <OwnerForm disabled={pending} onStart={startWorld} />
+        <DifficultyPicker value={game.difficulty} disabled={pending} onChange={changeDifficulty} />
+        <OwnerForm disabled={pending} onStart={link => startWorld(link)} />
         <div className="total">Очки <strong>{format.format(score)}</strong></div>
       </header>
       <main className="layout">
@@ -386,7 +452,7 @@ function App() {
                 <Editor key={round.id} round={round} file={file} onFile={selectFile} />
               )}
               {error && <p className="error" role="status">{error}</p>}
-              {round.result ? <Result result={round.result} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
+              {round.result ? <Result result={round.result} data={data} draft={game.draft} finished={finished >= total} score={score} onNext={next} /> : (
                 <>
                   <div className="hints">
                     {hints.map(([kind, label]) => (
@@ -403,9 +469,10 @@ function App() {
             </>
           )}
         </section>
-        <Atlas key={round?.id ?? "loading"} data={data} enabled={Boolean(round && !round.result && !pending)}
-          byLanguage={Boolean(game.world)} selected={game.draft.country} pin={game.draft.pin} result={round?.result} hint={round?.region}
-          onChoose={(repository, pin, country) => draft({ repository, pin, country })} />
+        <Atlas key={round?.id ?? "loading"} data={data} difficulty={data.difficulty ?? game.difficulty}
+          folders={folders} onNeedFolders={needFolders} enabled={Boolean(round && !round.result && !pending)}
+          ownerMap={Boolean(game.world)} choice={game.draft.choice} pin={game.draft.pin} result={round?.result} hint={round?.region}
+          onChoose={draft} />
       </main>
     </>
   );

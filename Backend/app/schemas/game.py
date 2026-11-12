@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.services.difficulty import DifficultyName
+
 STAR_BANDS = (0, 10, 100, 300, 500, 1000, 10000, 25000, 50000, 100000, 250000)
 Percentage = Annotated[int, Field(strict=True, ge=1, le=100)]
 
@@ -10,10 +12,12 @@ Percentage = Annotated[int, Field(strict=True, ge=1, le=100)]
 class RoundRequest(BaseModel):
     exclude: list[int] = Field(default_factory=list, max_length=20)
     world: UUID | None = None
+    difficulty: DifficultyName = "easy"
 
 
 class WorldRequest(BaseModel):
     url: str = Field(min_length=1, max_length=200)
+    difficulty: DifficultyName = "easy"
 
 
 class Pin(BaseModel):
@@ -27,6 +31,7 @@ class Guess(BaseModel):
     languages: dict[str, Percentage] = Field(default_factory=dict, max_length=30)
     year: int | None = Field(default=None, ge=2008, le=2100)
     stars: int | None = None
+    depth: int | None = Field(default=None, ge=0, le=3)
 
     @field_validator("languages")
     @classmethod
