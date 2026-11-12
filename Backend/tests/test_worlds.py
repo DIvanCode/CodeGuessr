@@ -206,7 +206,9 @@ def test_world_graph_can_open_source_outside_the_initial_clues() -> None:
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_graph_context_preserves_difficulty_and_folder_rounds(difficulty) -> None:
     github = FakeGitHub([remote_repo("api", "Python", 500)])
-    padding = "# Additional code in this clue.\n" * 90
+    expected = DIFFICULTIES[difficulty]
+    # Leave room for the leading context as well as a complete snippet.
+    padding = "# Additional code in this clue.\n" * (expected.context_length + expected.snippet_length)
     github.files = {
         f"server/play{index}.py": f"def play{index}():\n    return helper()\n" + padding
         for index in range(3)
@@ -217,7 +219,6 @@ def test_graph_context_preserves_difficulty_and_folder_rounds(difficulty) -> Non
         {"path": path, "type": "blob", "size": len(source)}
         for path, source in github.files.items()
     ]
-    expected = DIFFICULTIES[difficulty]
     with TestClient(create_app(github)) as client:
         world = client.post("/api/worlds", json={"url": "acme", "difficulty": difficulty}).json()
         response = client.post("/api/rounds", json={"world": world["id"]})
