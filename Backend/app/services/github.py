@@ -8,6 +8,7 @@ API_URL = "https://api.github.com"
 RAW_URL = "https://raw.githubusercontent.com"
 LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 RESERVED_PREFIXES = {"orgs", "users"}
+PAGE_SIZE = 100
 
 
 class GitHubError(Exception):
@@ -68,15 +69,25 @@ class GitHubClient:
     async def owner(self, login: str) -> dict:
         return await self.get(f"/users/{login}")
 
-    async def repositories(self, login: str) -> list[dict]:
-        return await self.get(f"/users/{login}/repos", type="owner", sort="pushed", per_page=100)
+    async def repositories(self, login: str, limit: int) -> list[dict]:
+        repositories = []
+        for page in range(1, (limit + PAGE_SIZE - 1) // PAGE_SIZE + 1):
+            batch = await self.get(f"/users/{login}/repos", type="owner", sort="pushed", per_page=PAGE_SIZE, page=page)
+            repositories.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                break
+        return repositories
+
+    async def repository(self, full_name: str) -> dict:
+        return await self.get(f"/repos/{full_name}")
 
     async def languages(self, full_name: str) -> dict[str, int]:
         return await self.get(f"/repos/{full_name}/languages")
 
-    async def tree(self, full_name: str, branch: str) -> list[dict]:
-        data = await self.get(f"/repos/{full_name}/git/trees/{quote(branch, safe='')}", recursive=1)
-        return [item for item in data.get("tree", []) if item.get("type") == "blob"]
+    async def tree(self, full_name: str, ref: str, *, recursive: bool = True) -> tuple[list[dict], bool]:
+        params = {"recursive": 1} if recursive else {}
+        data = await self.get(f"/repos/{full_name}/git/trees/{quote(ref, safe='')}", **params)
+        return data.get("tree", []), bool(data.get("truncated"))
 
     async def file(self, full_name: str, branch: str, path: str) -> str | None:
         try:

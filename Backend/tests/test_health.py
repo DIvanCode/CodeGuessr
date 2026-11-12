@@ -22,7 +22,7 @@ def test_readiness_when_catalogue_is_unavailable(monkeypatch) -> None:
     def unavailable():
         raise FileNotFoundError
 
-    monkeypatch.setattr(health, "atlas", unavailable)
+    monkeypatch.setattr(health, "catalog", unavailable)
     with TestClient(create_app()) as client:
         response = client.get("/api/health/ready")
     assert response.status_code == 503

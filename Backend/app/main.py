@@ -16,6 +16,7 @@ def create_app(github: GitHubClient | None = None) -> FastAPI:
     application = FastAPI(title="CodeGuessr API", version="0.1.0", lifespan=lifespan)
     application.state.rounds = {}
     application.state.worlds = {}
+    application.state.demo_worlds = {}
     application.include_router(api_router, prefix="/api")
     return application
 

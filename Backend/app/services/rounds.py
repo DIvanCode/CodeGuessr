@@ -11,73 +11,79 @@ from pygments.util import ClassNotFound
 
 from app.schemas.game import STAR_BANDS, Guess
 from app.services.call_graph import entry_node, make_call_graph
+from app.services.difficulty import Difficulty
+from app.services.sources import SourceFile
+from app.services.worlds import World, locate
 
 POINTS = {"repository": 5000, "year": 2000, "languages": 1000, "stars": 750}
 REGION_HINT_COST = 1000
-HINT_COSTS = {
-    "context": 500, "path": 500, "region": REGION_HINT_COST,
-    "stars": POINTS["stars"], "languages": REGION_HINT_COST,
-}
 MAX_SCORE = sum(POINTS.values())
-SNIPPET_LENGTH = 35
-CONTEXT_LENGTH = 8
+DEMO_CONTEXT_LENGTH = 8
+DISTANCE_POINTS = 4500
 
 
 @dataclass
 class GameRound:
     id: UUID
     snapshot: dict
-    repositories: list[dict]
+    world: World
     hints: dict = field(default_factory=dict)
     result: dict | None = None
 
 
-@dataclass
-class SourceFile:
-    path: str
-    text: str
-    start: int
+def hint_costs(difficulty: Difficulty) -> dict[str, int]:
+    return {
+        "context": 500, "path": 1500 if difficulty.folders else 500, "region": REGION_HINT_COST,
+        "stars": POINTS["stars"], "languages": REGION_HINT_COST,
+    }
 
 
 def demo_sources(repo: dict, demo: dict) -> list[SourceFile]:
     return [
-        SourceFile(path=path, text=text, start=min(CONTEXT_LENGTH, max(0, len(text.splitlines()) - 9)))
+        SourceFile(path=path, text=text, start=min(DEMO_CONTEXT_LENGTH, max(0, len(text.splitlines()) - 9)))
         for path, text in zip(repo["challenges"][0]["paths"], demo["sources"], strict=True)
     ]
 
 
 def make_snapshot(
-    repo: dict, country: dict, year: int, sources: list[SourceFile],
-    *, functions: list[list[dict]] | None = None,
+    world: World, repo: dict, year: int, sources: list[SourceFile],
+    *, folder: dict | None = None, functions: list[list[dict]] | None = None,
 ) -> dict:
+    difficulty = world.difficulty
+    country = world.country(repo["id"])
     files = []
     for source in sources:
         lines = source.text.splitlines()
         start = source.start
-        context_start = max(0, start - CONTEXT_LENGTH)
+        context_start = max(0, start - difficulty.context_length)
         try:
             lexer = get_lexer_for_filename(source.path, stripnl=False)
         except ClassNotFound:
             lexer = TextLexer(stripnl=False)
-        code = "\n".join(line[:500] for line in lines[: start + SNIPPET_LENGTH])
+        code = "\n".join(line[:500] for line in lines[: start + difficulty.snippet_length])
         highlighted = highlight(code, lexer, HtmlFormatter(nowrap=True)).split("\n")
         files.append({
             "path": source.path,
             "ref": repo["branch"],
             "context_start": context_start + 1,
             "start": start + 1,
-            "lines": highlighted[context_start:start + SNIPPET_LENGTH],
+            "lines": highlighted[context_start:start + difficulty.snippet_length],
         })
         if functions is not None:
             files[-1]["full_lines"] = highlight(
                 source.text, lexer, HtmlFormatter(nowrap=True)
             ).split("\n")
+    target = folder or country
     return {
         "year": year,
         **{key: repo[key] for key in ("full_name", "region", "stars", "size_mb", "languages")},
         "repository_id": repo["id"],
-        "x": country["x"],
-        "y": country["y"],
+        "repository": repo["id"],
+        "group": country["group"],
+        "folder": folder["id"] if folder else None,
+        "folder_polygon": folder["polygon"] if folder else None,
+        "x": target["x"],
+        "y": target["y"],
         "files": files,
         "call_graph": make_call_graph(functions or []),
     }
@@ -87,8 +93,9 @@ def public_round(round_: GameRound) -> dict:
     hints = round_.hints
     return {
         "id": str(round_.id),
+        "difficulty": round_.world.difficulty.name,
         "hints": hints,
-        "hint_costs": HINT_COSTS,
+        "hint_costs": hint_costs(round_.world.difficulty),
         "star_bands": STAR_BANDS,
         "hint_values": {
             **({"stars": round_.snapshot["stars"]} if hints.get("stars") else {}),
@@ -114,19 +121,42 @@ def normalized(value: str) -> str:
     return value.strip().casefold().lstrip("@")
 
 
-def grade(round_: GameRound, guess: Guess, selected_repo: dict | None) -> dict:
-    answer = round_.snapshot
+def country_by_name(world: World, text: str) -> dict | None:
+    name = normalized(text)
+    if not name:
+        return None
+    countries = world.atlas["repositories"]
+    exact = next((repo for repo in countries if repo["name"].casefold() == name), None)
+    if exact:
+        return exact
+    matches = [repo for repo in countries if repo["name"].rsplit("/", 1)[-1].casefold() == name]
+    return matches[0] if len(matches) == 1 else None
+
+
+def location_points(difficulty: Difficulty, location: dict, answer: dict) -> int:
+    points = 0
+    for level, level_points in zip(difficulty.levels, difficulty.level_points):
+        if location[level] is None or location[level] != answer[level]:
+            break
+        points = level_points
+    return points
+
+
+def grade(round_: GameRound, guess: Guess) -> dict:
+    world, answer = round_.world, round_.snapshot
+    difficulty = world.difficulty
     full_name = answer["full_name"]
-    repo_guess = normalized(guess.repository)
-    exact_repo = repo_guess == full_name.casefold() or (selected_repo is not None and selected_repo["id"] == answer["repository_id"])
     pin = guess.pin.model_dump() if guess.pin else None
-    if selected_repo:
-        pin = {"x": selected_repo["x"], "y": selected_repo["y"]}
-    distance = math.hypot(pin["x"] - answer["x"], pin["y"] - answer["y"]) if pin else None
-    if exact_repo:
-        repo_points = POINTS["repository"]
-    elif distance is not None:
-        repo_points = round(4500 * math.exp(-distance / 135))
+    if pin is None:
+        named = country_by_name(world, guess.repository)
+        pin = {"x": named["x"], "y": named["y"]} if named else None
+    location = locate(world, (pin["x"], pin["y"])) if pin else {level: None for level in difficulty.levels}
+    if guess.depth is not None:
+        location.update({level: None for level in difficulty.levels[guess.depth + 1:]})
+    if pin:
+        distance = math.hypot(pin["x"] - answer["x"], pin["y"] - answer["y"])
+        distance_points = round(DISTANCE_POINTS * math.exp(-distance / difficulty.distance_scale))
+        repo_points = max(location_points(difficulty, location, answer), distance_points)
     else:
         repo_points = 0
 
@@ -138,7 +168,7 @@ def grade(round_: GameRound, guess: Guess, selected_repo: dict | None) -> dict:
         "languages": round(POINTS["languages"] * overlap / 100),
         "stars": POINTS["stars"] if guess.stars == star_band else 0,
     }
-    penalty = sum(HINT_COSTS[kind] for kind in round_.hints)
+    penalty = sum(hint_costs(difficulty)[kind] for kind in round_.hints)
     repo_url = f"https://github.com/{full_name}"
     return {
         "score": max(0, sum(breakdown.values()) - penalty),
@@ -146,10 +176,12 @@ def grade(round_: GameRound, guess: Guess, selected_repo: dict | None) -> dict:
         "breakdown": breakdown,
         "penalty": penalty,
         "pin": pin,
-        "selected_repository_id": selected_repo["id"] if selected_repo else None,
+        "location": {level: location[level] for level in difficulty.levels},
+        "selected_repository_id": location["repository"],
         "answer": {
             **{key: answer[key] for key in (
-                "repository_id", "full_name", "languages", "year", "stars", "size_mb", "x", "y"
+                "repository_id", "full_name", "languages", "year", "stars", "size_mb", "x", "y",
+                "region", "group", "folder", "folder_polygon",
             )},
             "url": repo_url,
             "files": [
