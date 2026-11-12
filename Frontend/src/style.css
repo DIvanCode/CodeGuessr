@@ -87,7 +87,8 @@ h1 { margin: 0; color: var(--muted); font-size: .91rem; font-weight: 750; letter
 .graph-node strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px/1.5 var(--mono); }
 .graph-node small { color: var(--muted); font-size: .61rem; }
 .graph-node:disabled { opacity: 1; cursor: progress; }
-.graph-current { border-color: var(--gold); background: #393a2d; color: var(--gold); }
+.graph-current { z-index: 2; border-color: var(--gold); background: #393a2d; color: var(--gold); }
+.graph-exiting { pointer-events: none; }
 .graph-dragging, .graph-dragging .graph-node { cursor: grabbing; }
 .graph-empty {
   position: absolute; top: 34px; transform: translateX(-50%); white-space: nowrap;

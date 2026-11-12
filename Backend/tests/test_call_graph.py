@@ -22,10 +22,14 @@ def test_graph_exposes_one_hop_and_can_be_traversed_both_ways():
         assert "table.type.hashFunction" not in json.dumps(lookup)
         slot_id = next(node["id"] for node in lookup["callees"] if node["name"] == "slot_for")
         slot = client.get(graph_url + slot_id).json()
-        assert slot["callers"] == [lookup["node"]]
+        assert lookup["node"] in slot["callers"]
+        insert = next(node for node in slot["callers"] if node["name"] == "insert_if_missing")
+        added = client.get(graph_url + insert["id"]).json()
+        assert added["source"]["start"] == 19
+        assert len(added["source"]["lines"]) >= 15
         assert slot["callees"][0]["name"] == "table.type.hashFunction"
         assert slot["source"]["start"] == 1
-        assert len(slot["source"]["lines"]) == 5
+        assert len(slot["source"]["lines"]) > 17
         assert slot["source"]["name"] == "Файл 01"
         assert "redis/redis" not in json.dumps(slot)
         external = client.get(graph_url + slot["callees"][0]["id"]).json()
@@ -58,6 +62,9 @@ def test_every_demo_has_valid_function_sources_and_round_local_edges():
             round_ = start_demo(client, repo_id)
             base = f"/api/rounds/{round_['id']}/graph/"
             queue = [file["entry_node_id"] for file in round_["files"]]
+            for node_id in queue:
+                entry = client.get(base + node_id).json()
+                assert any(node["has_source"] for node in entry["callers"] + entry["callees"])
             # Also validate functions disconnected from the initial clues.
             count = sum(len(functions) for functions in demo["functions"])
             queue.extend(f"n{index}" for index in range(count))

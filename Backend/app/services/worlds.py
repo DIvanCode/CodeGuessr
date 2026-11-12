@@ -1,4 +1,5 @@
 import random
+from asyncio import gather
 from collections import Counter
 from dataclasses import dataclass, field
 from math import floor, sqrt
@@ -9,11 +10,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from app.services.atlas import build_atlas, center, contains, partition, rounded
 from app.services.catalog import catalog
 from app.services.difficulty import Difficulty
+from app.services.function_analysis import LANGUAGES
 from app.services.github import GitHubClient
 from app.services.sources import SourceFile
 from app.services.topics import cluster_repositories
 
 ROUND_ATTEMPTS = 4
+EXTRA_GRAPH_FILES = 6
+MAX_GRAPH_FILE_BYTES = 64_000
 MISC_TOPIC = "Разное"
 OTHER_LANGUAGES = "Другие языки"
 MAX_LANGUAGE_GROUPS = 5
@@ -157,12 +161,12 @@ def language_shares(sizes: dict[str, int]) -> dict[str, int]:
     return {name: share for name, share in ordered if share > 0}
 
 
-def is_code_file(item: dict) -> bool:
+def is_code_file(item: dict, min_bytes: int = MIN_FILE_BYTES) -> bool:
     path = PurePosixPath(item["path"])
     directories = {part.casefold() for part in path.parts[:-1]}
     return (
         path.suffix.casefold() in CODE_EXTENSIONS
-        and MIN_FILE_BYTES <= item.get("size", 0) <= MAX_FILE_BYTES
+        and min_bytes <= item.get("size", 0) <= MAX_FILE_BYTES
         and not directories & SKIPPED_DIRECTORIES
         and ".min." not in path.name
     )
@@ -221,15 +225,15 @@ def truncated_layout(top: list[dict], partial: list[dict]) -> list[dict]:
     return arrange(buckets)
 
 
-def code_files(entries: list[dict], prefix: str = "") -> list[dict]:
+def code_files(entries: list[dict], prefix: str = "", *, min_bytes: int = MIN_FILE_BYTES) -> list[dict]:
     files = [{**entry, "path": prefix + entry["path"]} for entry in entries if entry["type"] == "blob"]
-    return [item for item in files if is_code_file(item)]
+    return [item for item in files if is_code_file(item, min_bytes=min_bytes)]
 
 
 async def repository_tree(github: GitHubClient, world: World, repo: dict) -> dict:
     if repo["id"] not in world.trees:
         entries, truncated = await github.tree(repo["full_name"], repo["branch"])
-        tree = {"files": code_files(entries), "top": None}
+        tree = {"files": code_files(entries), "graph_files": code_files(entries, min_bytes=1), "top": None}
         if truncated:
             tree["top"], _ = await github.tree(repo["full_name"], repo["branch"], recursive=False)
         world.trees[repo["id"]] = tree
@@ -258,6 +262,7 @@ async def folder_files(github: GitHubClient, repo: dict, folder: dict) -> list[d
     if "sha" in folder:
         entries, _ = await github.tree(repo["full_name"], folder["sha"])
         folder["files"] = code_files(entries, folder["id"])
+        folder["graph_files"] = code_files(entries, folder["id"], min_bytes=1)
         del folder["sha"]
     return folder["files"]
 
@@ -327,9 +332,40 @@ async def repository_sources(
     return [], None
 
 
+async def additional_graph_sources(
+    github: GitHubClient, world: World, repo: dict, sources: list[SourceFile], folder: dict | None,
+) -> list[SourceFile]:
+    tree = await repository_tree(github, world, repo)
+    candidates = {item["path"]: item for item in tree["graph_files"]}
+    if folder:
+        candidates.update({item["path"]: item for item in folder.get("graph_files", [])})
+    selected = {source.path for source in sources}
+    languages = {LANGUAGES.get(PurePosixPath(source.path).suffix.casefold()) for source in sources}
+    directories = {str(PurePosixPath(source.path).parent) for source in sources}
+    paths = [
+        PurePosixPath(item["path"])
+        for item in candidates.values()
+        if item["path"] not in selected
+        and item["size"] <= MAX_GRAPH_FILE_BYTES
+        and PurePosixPath(item["path"]).suffix.casefold() in LANGUAGES
+    ]
+    paths.sort(key=lambda path: (
+        LANGUAGES[path.suffix.casefold()] not in languages,
+        str(path.parent) not in directories,
+        str(path),
+    ))
+    paths = [str(path) for path in paths[:EXTRA_GRAPH_FILES]]
+    texts = await gather(*(github.file(repo["full_name"], repo["branch"], path) for path in paths))
+    return [
+        SourceFile(path=path, text=text, start=0)
+        for path, text in zip(paths, texts, strict=True)
+        if text and "\x00" not in text and len(text.encode()) <= MAX_GRAPH_FILE_BYTES
+    ]
+
+
 async def world_challenge(
     github: GitHubClient, world: World, exclude: list[int],
-) -> tuple[dict, list[SourceFile], dict | None] | None:
+) -> tuple[dict, list[SourceFile], dict | None, list[SourceFile]] | None:
     rng = random.Random()
     candidates = [
         repo for repo in world.catalog["repositories"]
@@ -345,5 +381,6 @@ async def world_challenge(
             repo["languages"] = language_shares(await github.languages(repo["full_name"]))
         if "year" not in repo:
             repo["year"] = int((await github.repository(repo["full_name"]))["created_at"][:4])
-        return repo, sources, folder
+        graph_sources = await additional_graph_sources(github, world, repo, sources, folder)
+        return repo, sources, folder, graph_sources
     return None

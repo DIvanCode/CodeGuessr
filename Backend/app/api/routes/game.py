@@ -123,8 +123,8 @@ async def world_snapshot(request: Request, world: World, exclude: list[int]) -> 
         raise github_failure(error) from error
     if challenge is None:
         raise HTTPException(409, "Репозитории с подходящим кодом закончились. Начните новую игру.")
-    repo, sources, folder = challenge
-    return make_snapshot(world, repo, repo["year"], sources, folder=folder)
+    repo, sources, folder, graph_sources = challenge
+    return make_snapshot(world, repo, repo["year"], sources, folder=folder, graph_sources=graph_sources)
 
 
 @router.post("/rounds", status_code=201)
@@ -160,7 +160,7 @@ async def hint(round_id: UUID, payload: HintRequest, request: Request) -> dict:
     if round_.result is not None:
         raise HTTPException(409, "Раунд уже завершён.")
     if payload.kind == "context" and not (
-        any(file["start"] > file["context_start"] for file in round_.snapshot["files"])
+        any(file["start"] > file["context_start"] for file in round_.snapshot["files"][:round_.snapshot["clue_file_count"]])
         or any(
             node["start"] > 1
             for node in round_.snapshot["call_graph"]["nodes"].values()
