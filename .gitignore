@@ -19,8 +19,10 @@ htmlcov/
 .vscode/
 
 # Build artifacts
-build/
-dist/
+/Frontend/dist/
+/dist/
+/Backend/build/
+/Backend/dist/
 
 # Node
 node_modules/

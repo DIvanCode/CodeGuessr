@@ -1,0 +1,71 @@
+---
+- name: Build and push CodeGuessr images
+  hosts: Localhost
+  gather_facts: false
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    docker_hub_username: "{{ lookup('env', 'DOCKERHUB_USERNAME') | default('divancode74', true) }}"
+    docker_hub_token: "{{ lookup('env', 'DOCKERHUB_TOKEN') }}"
+    docker_auth_dir: "{{ lookup('env', 'RUNNER_TEMP') | default('/tmp', true) }}/codeguessr-docker-auth"
+  environment:
+    DOCKER_CONFIG: "{{ docker_auth_dir }}"
+  tasks:
+    - name: Validate the commit tag and Docker Hub credentials
+      ansible.builtin.assert:
+        that:
+          - (version | default('')) is match('^[0-9a-f]{40}$')
+          - docker_hub_username | length > 0
+          - docker_hub_token | length > 0
+        fail_msg: "Provide a full git SHA and the DOCKERHUB_TOKEN GitHub Actions secret."
+      no_log: true
+
+    - name: Create temporary Docker Hub authentication directory
+      ansible.builtin.file:
+        path: "{{ docker_auth_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Build both images and publish them to Docker Hub
+      block:
+        - name: Authenticate to Docker Hub using an access token
+          ansible.builtin.command:
+            argv: [docker, login, --username, "{{ docker_hub_username }}", --password-stdin]
+            stdin: "{{ docker_hub_token }}"
+          changed_when: false
+          no_log: true
+
+        - name: Build Backend image
+          ansible.builtin.command:
+            argv:
+              - docker
+              - build
+              - --pull
+              - --tag
+              - "{{ docker_hub_username }}/codeguessr-backend:{{ version }}"
+              - Backend
+            chdir: "{{ project_root }}"
+
+        - name: Build Frontend image
+          ansible.builtin.command:
+            argv:
+              - docker
+              - build
+              - --pull
+              - --tag
+              - "{{ docker_hub_username }}/codeguessr-frontend:{{ version }}"
+              - Frontend
+            chdir: "{{ project_root }}"
+
+        - name: Push Backend image
+          ansible.builtin.command:
+            argv: [docker, push, "{{ docker_hub_username }}/codeguessr-backend:{{ version }}"]
+
+        - name: Push Frontend image
+          ansible.builtin.command:
+            argv: [docker, push, "{{ docker_hub_username }}/codeguessr-frontend:{{ version }}"]
+      always:
+        - name: Remove temporary Docker Hub authentication
+          ansible.builtin.file:
+            path: "{{ docker_auth_dir }}"
+            state: absent
+          no_log: true
