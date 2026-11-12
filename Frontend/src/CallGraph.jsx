@@ -1,46 +1,72 @@
-import { useId, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { GRAPH_DURATION, NODE_HEIGHT, NODE_WIDTH, edgePath, graphTransition, layoutGraph } from "./call-graph-motion.js";
 
-const NODE_WIDTH = 112;
-const NODE_HEIGHT = 42;
 const CENTER = { x: 0, y: 0 };
 
-function arrangeNeighbors(graph) {
-  const nodes = new Map();
-  for (const [direction, neighbors] of [["incoming", graph.callers], ["outgoing", graph.callees]]) {
-    for (const node of neighbors) {
-      const neighbor = nodes.get(node.id) ?? { ...node };
-      neighbor[direction] = true;
-      nodes.set(node.id, neighbor);
+function useGraphScene(graph) {
+  const target = useMemo(() => layoutGraph(graph), [graph]);
+  const [scene, setScene] = useState(target);
+  const current = useRef(target);
+  const cameraOverride = useRef(false);
+
+  const setOffset = useCallback(value => {
+    // Dragging takes control of the camera while node transitions can finish.
+    cameraOverride.current = true;
+    const offset = typeof value === "function" ? value(current.current.offset) : value;
+    current.current = { ...current.current, offset };
+    setScene(current.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    const signature = frame => JSON.stringify([frame.focusId, frame.nodes, frame.edges]);
+    if (signature(current.current) === signature(target)) return;
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    cameraOverride.current = false;
+    let animation;
+    const show = value => {
+      current.current = cameraOverride.current ? { ...value, offset: current.current.offset } : value;
+      setScene(current.current);
+    };
+    const finish = () => { cancelAnimationFrame(animation); show(target); };
+    if (preference.matches) {
+      finish();
+      return;
     }
-  }
+    // A second click starts at the actual visible frame, avoiding position jumps.
+    const interpolate = graphTransition(current.current, target);
+    const started = performance.now();
+    const tick = now => {
+      const progress = Math.max(0, Math.min(1, (now - started) / GRAPH_DURATION));
+      show(interpolate(1 - (1 - progress) ** 3));
+      if (progress < 1) animation = requestAnimationFrame(tick);
+    };
+    const onPreferenceChange = () => { if (preference.matches) finish(); };
+    show(interpolate(0));
+    animation = requestAnimationFrame(tick);
+    preference.addEventListener("change", onPreferenceChange);
+    return () => {
+      cancelAnimationFrame(animation);
+      preference.removeEventListener("change", onPreferenceChange);
+    };
+  }, [target]);
 
-  const loop = nodes.delete(graph.node.id);
-  const count = nodes.size;
-  const radius = Math.max(88, count * 16);
-  const neighbors = Array.from(nodes.values(), (node, index) => {
-    const angle = index * 2 * Math.PI / count - Math.PI / 5;
-    return { ...node, x: Math.cos(angle) * radius * 1.65, y: Math.sin(angle) * radius };
-  });
-  return { loop, neighbors };
-}
-
-function edgeEndpoints({ x, y }) {
-  const inset = 1 / Math.max(Math.abs(x) / (NODE_WIDTH / 2), Math.abs(y) / (NODE_HEIGHT / 2));
-  return `M ${x * inset} ${y * inset} L ${x * (1 - inset)} ${y * (1 - inset)}`;
+  return [scene, setOffset];
 }
 
 export function CallGraph({ graph, onNavigate, disabled }) {
   const arrowId = useId();
-  const [offset, setOffset] = useState(CENTER);
+  const [scene, setOffset] = useGraphScene(graph);
+  const { offset } = scene;
   const [dragging, setDragging] = useState(false);
   const pointer = useRef(null);
   const suppressClick = useRef(false);
-  const { loop, neighbors } = arrangeNeighbors(graph);
+  const nodes = new Map(scene.nodes.map(node => [node.id, node]));
 
   function startPan(event) {
     if (!event.isPrimary || event.button !== 0) return;
     suppressClick.current = false;
     if (event.target.closest(".graph-reset")) return;
+    setOffset(offset);
     pointer.current = {
       id: event.pointerId, x: event.clientX, y: event.clientY, offset, moved: false,
     };
@@ -104,25 +130,25 @@ export function CallGraph({ graph, onNavigate, disabled }) {
               <path d="M0 0 L8 4 L0 8 Z" />
             </marker>
           </defs>
-          {neighbors.map(node => (
-            <path key={node.id} className="graph-edge" d={edgeEndpoints(node)}
-              markerStart={node.incoming ? `url(#${arrowId})` : undefined}
-              markerEnd={node.outgoing ? `url(#${arrowId})` : undefined} />
+          {scene.edges.map(edge => (
+            <path key={edge.key} className="graph-edge" opacity={edge.opacity}
+              d={edgePath(nodes.get(edge.source), nodes.get(edge.target))}
+              markerEnd={`url(#${arrowId})`} />
           ))}
-          {loop && <path className="graph-edge" d="M 20 -21 C 20 -69 79 -62 56 -12" markerEnd={`url(#${arrowId})`} />}
         </svg>
-        <div className="graph-node graph-current">
-          <strong title={graph.node.name}>{graph.node.name}</strong>
-        </div>
-        {neighbors.map(node => (
-          <button key={node.id} type="button" className="graph-node" style={{ left: node.x, top: node.y }}
-            title={node.name} disabled={disabled} onClick={() => onNavigate(node.id)}
+        {scene.nodes.map(node => (
+          <button key={node.id} type="button" data-node-id={node.id}
+            className={`graph-node${node.current ? " graph-current" : ""}${node.exiting ? " graph-exiting" : ""}`}
+            style={{ left: node.x, top: node.y, opacity: node.opacity }}
+            aria-current={node.current ? "true" : undefined} aria-hidden={node.exiting || undefined}
+            tabIndex={node.exiting ? -1 : 0} title={node.name} disabled={disabled || node.exiting}
+            onClick={() => { if (!node.current) onNavigate(node.id); }}
             onFocus={event => revealFocusedNode(event, node)}>
             <strong>{node.name}</strong>
-            {!node.has_source && <small>Без исходника</small>}
+            {!node.has_source && !node.current && <small>Без исходника</small>}
           </button>
         ))}
-        {!neighbors.length && !loop && <span className="graph-empty">Нет прямых связей</span>}
+        {scene.nodes.length === 1 && !scene.edges.length && <span className="graph-empty">Нет прямых связей</span>}
       </div>
       {(offset.x !== 0 || offset.y !== 0) && (
         <button className="graph-reset" type="button" onClick={() => setOffset(CENTER)}>К центру</button>
