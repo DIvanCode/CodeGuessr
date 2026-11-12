@@ -1,0 +1,256 @@
+---
+- name: Trust only the verified production SSH host key
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ssh_known_hosts_entry: "{{ lookup('env', 'SSH_KNOWN_HOSTS') }}"
+  tasks:
+    - name: Validate the pinned SSH host key
+      ansible.builtin.assert:
+        that:
+          - (ssh_known_hosts_entry | default('')) is match('^201\.34\.148\.71 ssh-(ed25519|rsa) [A-Za-z0-9+/=]+( .*)?$')
+        fail_msg: "Set ssh_known_hosts_entry to the VERIFIED SSH public host key of 201.34.148.71."
+
+    - name: Ensure a secure SSH configuration directory exists
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'HOME') }}/.ssh"
+        state: directory
+        mode: '0700'
+
+    - name: Pin the production server host key
+      ansible.builtin.known_hosts:
+        path: "{{ lookup('env', 'HOME') }}/.ssh/known_hosts"
+        name: 201.34.148.71
+        key: "{{ ssh_known_hosts_entry }}"
+        state: present
+
+- name: Deploy CodeGuessr directly with Docker containers
+  hosts: Production
+  gather_facts: false
+  vars:
+    # Domain is public configuration; no Ansible Vault or .env is required on host.
+    domain: guessr.coduels.pro
+    docker_hub_username: "{{ lookup('env', 'DOCKERHUB_USERNAME') | default('divancode74', true) }}"
+    docker_hub_token: "{{ lookup('env', 'DOCKERHUB_TOKEN') }}"
+    github_token: "{{ lookup('env', 'GH_API_TOKEN') }}"
+    ansible_password: "{{ lookup('env', 'SSH_PASSWORD') }}"
+    app_root: /opt/codeguessr
+    docker_auth_dir: /opt/codeguessr/.docker-auth
+    backend_image: "{{ docker_hub_username }}/codeguessr-backend:{{ version }}"
+    frontend_image: "{{ docker_hub_username }}/codeguessr-frontend:{{ version }}"
+    caddy_image: caddy:2.11.4-alpine
+    app_network: codeguessr_app_private
+    edge_network: codeguessr_public_edge
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=yes'
+  tasks:
+    - name: Validate deployment parameters
+      ansible.builtin.assert:
+        that:
+          - (version | default('')) is match('^[0-9a-f]{40}$')
+          - domain | length > 0
+          - docker_hub_username | length > 0
+          - docker_hub_token | length > 0
+          - (lookup('env', 'SSH_PASSWORD') | length) > 0
+        fail_msg: "A valid commit SHA, domain, DOCKERHUB_TOKEN and SSH_PASSWORD are required."
+
+    - name: Verify Docker is available on the production host
+      ansible.builtin.command: docker info
+      changed_when: false
+
+    - name: Create application and persistent Caddy directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ app_root }}"
+        - "{{ app_root }}/caddy"
+        - "{{ app_root }}/caddy/data"
+        - "{{ app_root }}/caddy/config"
+
+    - name: Install the Caddy configuration
+      ansible.builtin.copy:
+        src: ../../Caddyfile
+        dest: "{{ app_root }}/caddy/Caddyfile"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create private Backend network
+      community.docker.docker_network:
+        name: "{{ app_network }}"
+        state: present
+
+    - name: Create Caddy-to-Frontend network
+      community.docker.docker_network:
+        name: "{{ edge_network }}"
+        state: present
+
+    - name: Create temporary private Docker Hub credentials directory
+      ansible.builtin.file:
+        path: "{{ docker_auth_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Pull images with temporary Docker Hub credentials
+      block:
+        - name: Authenticate using the Docker Hub access token
+          ansible.builtin.command:
+            argv: [docker, login, --username, "{{ docker_hub_username }}", --password-stdin]
+            stdin: "{{ docker_hub_token }}"
+          environment:
+            DOCKER_CONFIG: "{{ docker_auth_dir }}"
+          changed_when: false
+          no_log: true
+
+        - name: Pull Backend image
+          ansible.builtin.command:
+            argv: [docker, pull, "{{ backend_image }}"]
+          environment:
+            DOCKER_CONFIG: "{{ docker_auth_dir }}"
+
+        - name: Pull Frontend image
+          ansible.builtin.command:
+            argv: [docker, pull, "{{ frontend_image }}"]
+          environment:
+            DOCKER_CONFIG: "{{ docker_auth_dir }}"
+
+        - name: Pull Caddy image
+          ansible.builtin.command:
+            argv: [docker, pull, "{{ caddy_image }}"]
+          environment:
+            DOCKER_CONFIG: "{{ docker_auth_dir }}"
+      always:
+        - name: Remove temporary Docker Hub credentials
+          ansible.builtin.file:
+            path: "{{ docker_auth_dir }}"
+            state: absent
+          no_log: true
+
+    - name: Validate the Caddyfile before starting containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --env
+          - "DOMAIN={{ domain }}"
+          - --volume
+          - "{{ app_root }}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          - "{{ caddy_image }}"
+          - caddy
+          - validate
+          - --config
+          - /etc/caddy/Caddyfile
+          - --adapter
+          - caddyfile
+      changed_when: false
+
+    - name: Start Backend
+      community.docker.docker_container:
+        name: codeguessr-backend
+        image: "{{ backend_image }}"
+        state: started
+        restart_policy: unless-stopped
+        recreate: true
+        read_only: true
+        tmpfs:
+          - /tmp:rw,nosuid,noexec,size=32m
+        cap_drop: [ALL]
+        security_opts: ["no-new-privileges:true"]
+        env:
+          GITHUB_TOKEN: "{{ github_token | default('') | string }}"
+        networks:
+          - name: "{{ app_network }}"
+            aliases: [backend]
+        comparisons:
+          networks: strict
+        healthcheck:
+          test:
+            - CMD
+            - python
+            - -c
+            - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"
+          interval: 3s
+          timeout: 5s
+          retries: 10
+      no_log: true
+
+    - name: Wait until Backend is healthy
+      community.docker.docker_container_info:
+        name: codeguessr-backend
+      register: backend_status
+      until: backend_status.container.State.Health.Status == 'healthy'
+      retries: 30
+      delay: 2
+
+    - name: Start Frontend with private Backend and public Caddy connectivity
+      community.docker.docker_container:
+        name: codeguessr-frontend
+        image: "{{ frontend_image }}"
+        state: started
+        restart_policy: unless-stopped
+        recreate: true
+        security_opts: ["no-new-privileges:true"]
+        networks:
+          - name: "{{ app_network }}"
+          - name: "{{ edge_network }}"
+            aliases: [frontend]
+        comparisons:
+          networks: strict
+        healthcheck:
+          test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1/']
+          interval: 3s
+          timeout: 5s
+          retries: 10
+
+    - name: Wait until Frontend is healthy
+      community.docker.docker_container_info:
+        name: codeguessr-frontend
+      register: frontend_status
+      until: frontend_status.container.State.Health.Status == 'healthy'
+      retries: 30
+      delay: 2
+
+    - name: Start Caddy with HTTPS and persistent certificates
+      community.docker.docker_container:
+        name: codeguessr-caddy
+        image: "{{ caddy_image }}"
+        state: started
+        restart_policy: unless-stopped
+        recreate: true
+        security_opts: ["no-new-privileges:true"]
+        env:
+          DOMAIN: "{{ domain | string }}"
+        published_ports:
+          - '80:80'
+          - '443:443'
+          - '443:443/udp'
+        volumes:
+          - "{{ app_root }}/caddy/Caddyfile:/etc/caddy/Caddyfile:ro"
+          - "{{ app_root }}/caddy/data:/data"
+          - "{{ app_root }}/caddy/config:/config"
+        networks:
+          - name: "{{ edge_network }}"
+        comparisons:
+          networks: strict
+
+    - name: Verify live public HTTPS and API readiness
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/api/health/ready"
+        method: GET
+        status_code: 200
+        validate_certs: true
+        use_proxy: false
+        timeout: 10
+      delegate_to: localhost
+      become: false
+      register: live_status
+      until: live_status.status == 200
+      retries: 20
+      delay: 3

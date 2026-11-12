@@ -1,0 +1,2 @@
+[Production]
+201.34.148.71 ansible_user=root ansible_connection=ssh
