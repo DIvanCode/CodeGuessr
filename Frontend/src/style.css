@@ -9,8 +9,10 @@
   --gold: #ffd273;
   --coral: #fa8067;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  --display: "Arial Narrow", "Liberation Sans Narrow", Impact, sans-serif;
+  --display: "Arial Narrow", "Liberation Sans Narrow", "Avenir Next Condensed", "Roboto Condensed", sans-serif-condensed, Impact, sans-serif;
   font: 14px/1.5 system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   background: var(--water);
   color: var(--text);
 }
@@ -55,8 +57,14 @@ a { color: var(--gold); }
 .world-badge button { background: none; }
 .total { color: var(--muted); font-size: .84rem; display: flex; align-items: center; gap: 9px; }
 .total strong { color: var(--text); font: 800 24px/1 var(--display); }
-.layout { display: grid; grid-template-columns: minmax(350px, 40fr) minmax(0, 60fr); min-height: calc(100dvh - 52px); }
-.game { padding: 15px 20px 20px; min-width: 0; border-right: 1px solid var(--stroke); background: var(--panel); }
+.layout {
+  display: grid; grid-template-columns: minmax(350px, 40fr) minmax(0, 60fr); grid-template-rows: auto 1fr;
+  min-height: calc(100dvh - 52px);
+}
+.game, .answer { grid-column: 1; min-width: 0; border-right: 1px solid var(--stroke); background: var(--panel); }
+.game { grid-row: 1; padding: 15px 20px 0; }
+.answer { grid-row: 2; padding: 0 20px 20px; }
+.answer > form, .answer > .result { margin-top: 12px; }
 h1 { margin: 0; color: var(--muted); font-size: .91rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .round-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; }
 .demo-badge { border: 1px solid #49616a; color: #c5d5d8; border-radius: 99px; padding: 1px 7px; font: 10px/1.5 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
@@ -121,7 +129,7 @@ h1 { margin: 0; color: var(--muted); font-size: .91rem; font-weight: 750; letter
 .line-text :is(.mi,.mf,.mh,.mo,.il,.m,.mb) { color: #ffd273; }
 .line-text :is(.c,.c1,.cm,.cp,.cs,.ch) { color: #8ba0a7; }
 .line-text :is(.nf,.nc,.na,.nb,.nn,.fm) { color: #9ccde6; }
-.hints { display: flex; flex-wrap: wrap; gap: 6px; margin: 11px 0 12px; }
+.hints { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; }
 .hints button { border-style: dashed; border-radius: 99px; padding: 5px 10px; background: transparent; font-size: .8rem; }
 .hints span, .error { color: var(--coral); }
 .error { margin: 6px 0; }
@@ -170,7 +178,7 @@ h1 { margin: 0; color: var(--muted); font-size: .91rem; font-weight: 750; letter
 .submit-card small { display: block; color: var(--muted); }
 #selection { font-weight: 700; overflow-wrap: anywhere; }
 .primary { padding: 8px 15px; color: #182222; background: var(--gold); font-weight: 800; white-space: nowrap; }
-.atlas { min-width: 0; display: flex; flex-direction: column; background: var(--water); }
+.atlas { grid-column: 2; grid-row: 1 / 3; min-width: 0; display: flex; flex-direction: column; background: var(--water); }
 .map-wrap { flex: 1; position: relative; overflow: hidden; min-height: 530px; isolation: isolate; }
 #map {
   width: 100%; height: 100%; position: absolute; inset: 0; touch-action: none; cursor: crosshair;
@@ -242,11 +250,23 @@ h1 { margin: 0; color: var(--muted); font-size: .91rem; font-weight: 750; letter
   .difficulty { order: 2; margin-left: 0; }
   .owner-form input { flex: 1; width: auto; }
   .total { margin-left: auto; }
-  .layout { grid-template-columns: minmax(0, 1fr); }
-  .game { border-right: 0; padding: 13px 14px; }
-  .atlas { grid-row: 1; border-bottom: 1px solid var(--stroke); }
-  .map-wrap { min-height: 0; height: clamp(330px, 76vw, 560px); }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .game, .answer, .atlas { grid-column: auto; grid-row: auto; border-right: 0; }
+  .game { padding: 13px 14px; }
+  .answer { padding: 0 14px 20px; }
+  .answer:empty { display: none; }
+  .atlas { border-block: 1px solid var(--stroke); }
+  .map-wrap { flex: none; min-height: 0; height: clamp(360px, 100vw, 560px); }
+  .zoom { top: auto; bottom: 10px; right: 10px; grid-auto-flow: column; }
   .code { min-height: 200px; max-height: min(42dvh, 290px); }
+}
+.only-touch { display: none; }
+@media (pointer: coarse) {
+  .only-touch { display: inline; }
+  .only-mouse { display: none; }
+  input, select { font-size: 16px; }
+  .zoom button { width: 40px; height: 40px; }
+  .hints button, .star-bands button { min-height: 36px; }
 }
 @media (max-width: 430px) {
   .topbar { padding: 0 12px; gap: 12px; }

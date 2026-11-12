@@ -139,6 +139,8 @@ function inView(view, item) {
 export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enabled, choice, pin, result, hint, onChoose }) {
   const svg = useRef(null);
   const drag = useRef(null);
+  const touches = useRef(new Map());
+  const pinch = useRef(null);
   const axes = AXES[ownerMap ? data.region_axis ?? "topic" : "demo"];
   const levels = LEVELS[difficulty] ?? LEVELS.easy;
   const steps = thresholds(data, levels);
@@ -235,9 +237,52 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
     }
   }
 
+  function startPinch(element) {
+    const [first, second] = [...touches.current.values()];
+    const middle = { clientX: (first.x + second.x) / 2, clientY: (first.y + second.y) / 2 };
+    pinch.current = {
+      distance: Math.hypot(first.x - second.x, first.y - second.y) || 1,
+      middle,
+      origin: mapPoint(element, middle),
+      scale: element.getScreenCTM().a,
+      view,
+    };
+    drag.current = null;
+    setDragging(false);
+  }
+
+  function movePinch() {
+    const [first, second] = [...touches.current.values()];
+    const start = pinch.current;
+    const factor = Math.hypot(first.x - second.x, first.y - second.y) / start.distance;
+    const next = zoomed(start.view, factor, maxZoomRef.current, start.origin);
+    const scale = start.scale * start.view.width / next.width;
+    const dx = (first.x + second.x) / 2 - start.middle.clientX;
+    const dy = (first.y + second.y) / 2 - start.middle.clientY;
+    setView(moveView({ ...next, x: next.x - dx / scale, y: next.y - dy / scale }));
+  }
+
+  function releasePointer(event) {
+    touches.current.delete(event.pointerId);
+    if (pinch.current && touches.current.size < 2) {
+      pinch.current = null;
+      drag.current = null;
+      return true;
+    }
+    return false;
+  }
+
   function pointerDown(event) {
-    if (event.button !== 0 || !event.isPrimary) return;
     const element = event.currentTarget;
+    if (event.pointerType !== "mouse") {
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      element.setPointerCapture(event.pointerId);
+      if (touches.current.size === 2) {
+        startPinch(element);
+        return;
+      }
+    }
+    if (event.button !== 0 || !event.isPrimary) return;
     drag.current = {
       x: event.clientX,
       y: event.clientY,
@@ -256,6 +301,13 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
   }
 
   function pointerMove(event) {
+    if (touches.current.has(event.pointerId)) {
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pinch.current) {
+        movePinch();
+        return;
+      }
+    }
     const current = drag.current;
     if (current) {
       const dx = event.clientX - current.x;
@@ -267,6 +319,7 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
       }
       return;
     }
+    if (event.pointerType !== "mouse") return;
     const location = locate(data, folders, mapPoint(event.currentTarget, event), levels, choiceDepth);
     const box = event.currentTarget.getBoundingClientRect();
     setTooltip(location.region ? {
@@ -277,14 +330,17 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
     } : null);
   }
 
-  function endDrag() {
+  function endDrag(event) {
+    releasePointer(event);
     drag.current = null;
     setDragging(false);
   }
 
-  function pointerUp() {
+  function pointerUp(event) {
+    if (releasePointer(event)) return;
     const current = drag.current;
-    endDrag();
+    drag.current = null;
+    setDragging(false);
     if (!current || current.moved || !enabled) return;
     const { x, y } = current.point;
     const location = locate(data, folders, current.point, levels, choiceDepth);
@@ -409,7 +465,7 @@ export function Atlas({ data, difficulty, folders, onNeedFolders, ownerMap, enab
         {levels.includes("group") && <span><b>Группа</b> — {axes.group}</span>}
         <span><b>Страна</b> — репозиторий</span>
         {levels.includes("folder") && <span><b>Город</b> — папка внутри репозитория</span>}
-        <span><b>Колесо</b> приближает: глубже видны {levels.length > 2 ? "новые границы" : "названия"}</span>
+        <span><b className="only-mouse">Колесо</b><b className="only-touch">Щипок</b> приближает: глубже видны {levels.length > 2 ? "новые границы" : "названия"}</span>
       </footer>
     </section>
   );
